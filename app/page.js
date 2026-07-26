@@ -37,7 +37,8 @@ export default function Storefront() {
       setUser(user);
       if (user) {
         fetchUserCart(user.id);
-        fetchUserOrders(user.phone || user.email, user.id);
+        const userPhone = user.user_metadata?.phone_number || user.email?.split('@')[0];
+        fetchUserOrders(userPhone, user.id);
       }
     });
 
@@ -47,7 +48,8 @@ export default function Storefront() {
       setUser(currentUser);
       if (currentUser) {
         fetchUserCart(currentUser.id);
-        fetchUserOrders(currentUser.phone || currentUser.email, currentUser.id);
+        const userPhone = currentUser.user_metadata?.phone_number || currentUser.email?.split('@')[0];
+        fetchUserOrders(userPhone, currentUser.id);
       } else {
         setCart([]);
         setUserOrders([]);
@@ -71,11 +73,11 @@ export default function Storefront() {
     if (data) setCart(data);
   };
 
-  const fetchUserOrders = async (contactIdentifier, userId) => {
+  const fetchUserOrders = async (phone, userId) => {
     const { data } = await supabase
       .from('orders')
       .select('*')
-      .or(`customer_phone.eq.${contactIdentifier},user_id.eq.${userId}`)
+      .or(`customer_phone.eq.${phone},user_id.eq.${userId}`)
       .order('created_at', { ascending: false });
     if (data) setUserOrders(data);
   };
@@ -84,18 +86,22 @@ export default function Storefront() {
     e.preventDefault();
     setAuthMsg('Processing...');
 
-    // Format phone number to international standard for Ghana (+233)
-    let formattedPhone = phoneInput.trim();
-    if (formattedPhone.startsWith('0')) {
-      formattedPhone = '+233' + formattedPhone.slice(1);
-    }
+    let rawPhone = phoneInput.trim().replace(/\s+/g, '');
+    if (!rawPhone) return setAuthMsg('Please enter a valid phone number.');
+
+    // Internal mapping to bypass paid Twilio SMS requirement
+    const internalEmail = `${rawPhone}@megadeals.store`;
 
     if (isSignUp) {
       // Sign Up Flow
       const { data, error } = await supabase.auth.signUp({
-        phone: formattedPhone,
+        email: internalEmail,
         password: passwordInput,
+        options: {
+          data: { phone_number: rawPhone },
+        },
       });
+
       if (error) {
         setAuthMsg(`Error: ${error.message}`);
       } else {
@@ -104,9 +110,10 @@ export default function Storefront() {
     } else {
       // Log In Flow
       const { data, error } = await supabase.auth.signInWithPassword({
-        phone: formattedPhone,
+        email: internalEmail,
         password: passwordInput,
       });
+
       if (error) {
         setAuthMsg(`Error: ${error.message}`);
       } else {
@@ -131,7 +138,6 @@ export default function Storefront() {
     const itemToAdd = { product_id: product.id, title: product.title, price: product.price, size };
 
     if (user) {
-      // Save directly to Supabase DB for persistent cart
       const { data, error } = await supabase.from('carts').insert([
         { user_id: user.id, ...itemToAdd }
       ]).select();
@@ -140,7 +146,6 @@ export default function Storefront() {
         setCart([...cart, data[0]]);
       }
     } else {
-      // Temporary state for guests
       setCart([...cart, itemToAdd]);
     }
 
@@ -159,27 +164,25 @@ export default function Storefront() {
   const rawTotal = cart.reduce((sum, item) => sum + Number(item.price), 0);
   const paymentAmount = depositPlan === 70 ? rawTotal * 0.7 : rawTotal;
 
-  // Paystack Trigger Logic
   const handlePaystackCheckout = (e) => {
     e.preventDefault();
 
     if (cart.length === 0) return alert('Your cart is empty!');
-    const phoneToUse = user ? (user.phone || custPhone) : custPhone;
-    if (!custName || !phoneToUse) return alert('Please complete your name and WhatsApp number!');
+    const userPhone = user?.user_metadata?.phone_number || custPhone;
+    if (!custName || !userPhone) return alert('Please complete your name and phone number!');
 
     if (typeof window.PaystackPop === 'undefined') {
       const script = document.createElement('script');
       script.src = 'https://js.paystack.co/v1/inline.js';
-      script.onload = () => openPaystack(phoneToUse);
+      script.onload = () => openPaystack(userPhone);
       document.body.appendChild(script);
     } else {
-      openPaystack(phoneToUse);
+      openPaystack(userPhone);
     }
   };
 
   const openPaystack = (phone) => {
-    // Generate placeholder email for Paystack API compliance if phone is used
-    const paystackEmail = user?.email || `${phone.replace('+', '')}@megadeals.store`;
+    const paystackEmail = user?.email || `${phone}@megadeals.store`;
 
     const handler = window.PaystackPop.setup({
       key: PAYSTACK_PUBLIC_KEY,
@@ -188,7 +191,6 @@ export default function Storefront() {
       currency: 'GHS',
       ref: 'MGD-' + Math.floor(Math.random() * 1000000000 + 1),
       callback: async function (response) {
-        // Save complete order to Supabase database
         await supabase.from('orders').insert([
           {
             user_id: user ? user.id : null,
@@ -202,7 +204,6 @@ export default function Storefront() {
           },
         ]);
 
-        // Clear cart after checkout
         if (user) {
           await supabase.from('carts').delete().eq('user_id', user.id);
         }
@@ -219,6 +220,8 @@ export default function Storefront() {
     handler.openIframe();
   };
 
+  const displayPhone = user?.user_metadata?.phone_number || user?.email?.split('@')[0];
+
   return (
     <div style={{ maxWidth: '480px', margin: '0 auto', padding: '16px', paddingBottom: '90px' }}>
       
@@ -227,7 +230,7 @@ export default function Storefront() {
         <div>
           <h1 style={{ fontSize: '20px', fontWeight: '900', color: '#fff', margin: 0, letterSpacing: '1px' }}>MEGADEALS IMPORTS</h1>
           <p style={{ fontSize: '11px', color: '#38bdf8', margin: 0, fontWeight: 'bold' }}>
-            {user ? `Logged in: ${user.phone || 'User'}` : '⚡ Pre-orders Active'}
+            {user ? `Logged in: ${displayPhone}` : '⚡ Pre-orders Active'}
           </p>
         </div>
       </div>
@@ -398,7 +401,7 @@ export default function Storefront() {
             {user ? (
               <div>
                 <p style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold', marginTop: 0 }}>Welcome back!</p>
-                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>{user.phone || 'Logged In Account'}</p>
+                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>Phone: {displayPhone}</p>
                 <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
                   Log Out
                 </button>
@@ -409,7 +412,7 @@ export default function Storefront() {
                   {isSignUp ? 'Create an Account' : 'Log In'}
                 </p>
                 <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '14px' }}>
-                  {isSignUp ? 'Sign up with your phone number and password.' : 'Enter your registered phone number and password.'}
+                  {isSignUp ? 'Sign up with your phone number and password.' : 'Enter your phone number and password.'}
                 </p>
 
                 <input
