@@ -16,7 +16,9 @@ export default function Storefront() {
 
   // Auth State
   const [user, setUser] = useState(null);
-  const [authEmail, setAuthEmail] = useState('');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
   const [authMsg, setAuthMsg] = useState('');
 
   // Cart & Checkout States
@@ -35,7 +37,7 @@ export default function Storefront() {
       setUser(user);
       if (user) {
         fetchUserCart(user.id);
-        fetchUserOrders(user.email, user.id);
+        fetchUserOrders(user.phone || user.email, user.id);
       }
     });
 
@@ -45,7 +47,7 @@ export default function Storefront() {
       setUser(currentUser);
       if (currentUser) {
         fetchUserCart(currentUser.id);
-        fetchUserOrders(currentUser.email, currentUser.id);
+        fetchUserOrders(currentUser.phone || currentUser.email, currentUser.id);
       } else {
         setCart([]);
         setUserOrders([]);
@@ -69,23 +71,47 @@ export default function Storefront() {
     if (data) setCart(data);
   };
 
-  const fetchUserOrders = async (email, userId) => {
+  const fetchUserOrders = async (contactIdentifier, userId) => {
     const { data } = await supabase
       .from('orders')
       .select('*')
-      .or(`customer_email.eq.${email},user_id.eq.${userId}`)
+      .or(`customer_phone.eq.${contactIdentifier},user_id.eq.${userId}`)
       .order('created_at', { ascending: false });
     if (data) setUserOrders(data);
   };
 
-  const handleMagicLogin = async (e) => {
+  const handlePhoneAuth = async (e) => {
     e.preventDefault();
-    setAuthMsg('Sending magic login link...');
-    const { error } = await supabase.auth.signInWithOtp({ email: authEmail });
-    if (error) {
-      setAuthMsg(`Error: ${error.message}`);
+    setAuthMsg('Processing...');
+
+    // Format phone number to international standard for Ghana (+233)
+    let formattedPhone = phoneInput.trim();
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '+233' + formattedPhone.slice(1);
+    }
+
+    if (isSignUp) {
+      // Sign Up Flow
+      const { data, error } = await supabase.auth.signUp({
+        phone: formattedPhone,
+        password: passwordInput,
+      });
+      if (error) {
+        setAuthMsg(`Error: ${error.message}`);
+      } else {
+        setAuthMsg('🎉 Account created! You are now logged in.');
+      }
     } else {
-      setAuthMsg('Check your email for the login link!');
+      // Log In Flow
+      const { data, error } = await supabase.auth.signInWithPassword({
+        phone: formattedPhone,
+        password: passwordInput,
+      });
+      if (error) {
+        setAuthMsg(`Error: ${error.message}`);
+      } else {
+        setAuthMsg('✅ Logged in successfully!');
+      }
     }
   };
 
@@ -93,6 +119,7 @@ export default function Storefront() {
     await supabase.auth.signOut();
     setUser(null);
     setCart([]);
+    setAuthMsg('');
   };
 
   const handleSizeSelect = (productId, size) => {
@@ -104,7 +131,7 @@ export default function Storefront() {
     const itemToAdd = { product_id: product.id, title: product.title, price: product.price, size };
 
     if (user) {
-      // Save directly to Supabase for logged-in user
+      // Save directly to Supabase DB for persistent cart
       const { data, error } = await supabase.from('carts').insert([
         { user_id: user.id, ...itemToAdd }
       ]).select();
@@ -113,7 +140,7 @@ export default function Storefront() {
         setCart([...cart, data[0]]);
       }
     } else {
-      // Local cart if guest
+      // Temporary state for guests
       setCart([...cart, itemToAdd]);
     }
 
@@ -132,39 +159,42 @@ export default function Storefront() {
   const rawTotal = cart.reduce((sum, item) => sum + Number(item.price), 0);
   const paymentAmount = depositPlan === 70 ? rawTotal * 0.7 : rawTotal;
 
-  // Fixed Paystack Integration
+  // Paystack Trigger Logic
   const handlePaystackCheckout = (e) => {
     e.preventDefault();
 
     if (cart.length === 0) return alert('Your cart is empty!');
-    const emailToUse = user ? user.email : authEmail;
-    if (!custName || !emailToUse || !custPhone) return alert('Please complete your name, email, and phone number!');
+    const phoneToUse = user ? (user.phone || custPhone) : custPhone;
+    if (!custName || !phoneToUse) return alert('Please complete your name and WhatsApp number!');
 
     if (typeof window.PaystackPop === 'undefined') {
       const script = document.createElement('script');
       script.src = 'https://js.paystack.co/v1/inline.js';
-      script.onload = () => openPaystack(emailToUse);
+      script.onload = () => openPaystack(phoneToUse);
       document.body.appendChild(script);
     } else {
-      openPaystack(emailToUse);
+      openPaystack(phoneToUse);
     }
   };
 
-  const openPaystack = (email) => {
+  const openPaystack = (phone) => {
+    // Generate placeholder email for Paystack API compliance if phone is used
+    const paystackEmail = user?.email || `${phone.replace('+', '')}@megadeals.store`;
+
     const handler = window.PaystackPop.setup({
       key: PAYSTACK_PUBLIC_KEY,
-      email: email,
+      email: paystackEmail,
       amount: Math.round(paymentAmount * 100),
       currency: 'GHS',
       ref: 'MGD-' + Math.floor(Math.random() * 1000000000 + 1),
       callback: async function (response) {
-        // Save order to Supabase
+        // Save complete order to Supabase database
         await supabase.from('orders').insert([
           {
             user_id: user ? user.id : null,
             customer_name: custName,
-            customer_email: email,
-            customer_phone: custPhone,
+            customer_email: paystackEmail,
+            customer_phone: phone,
             amount_paid: paymentAmount,
             deposit_plan: `${depositPlan}%`,
             items: cart.map((i) => `${i.title} (${i.size})`).join(', '),
@@ -172,13 +202,13 @@ export default function Storefront() {
           },
         ]);
 
-        // Clear Cart
+        // Clear cart after checkout
         if (user) {
           await supabase.from('carts').delete().eq('user_id', user.id);
         }
         setCart([]);
         alert(`🎉 Payment Successful! Reference: ${response.reference}`);
-        if (user) fetchUserOrders(user.email, user.id);
+        if (user) fetchUserOrders(phone, user.id);
         setActiveTab('orders');
       },
       onClose: function () {
@@ -197,7 +227,7 @@ export default function Storefront() {
         <div>
           <h1 style={{ fontSize: '20px', fontWeight: '900', color: '#fff', margin: 0, letterSpacing: '1px' }}>MEGADEALS IMPORTS</h1>
           <p style={{ fontSize: '11px', color: '#38bdf8', margin: 0, fontWeight: 'bold' }}>
-            {user ? `Logged in as ${user.email.split('@')[0]}` : '⚡ Pre-orders Active'}
+            {user ? `Logged in: ${user.phone || 'User'}` : '⚡ Pre-orders Active'}
           </p>
         </div>
       </div>
@@ -311,19 +341,9 @@ export default function Storefront() {
                   onChange={(e) => setCustName(e.target.value)}
                   style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '8px', fontSize: '13px', boxSizing: 'border-box' }}
                 />
-                {!user && (
-                  <input
-                    type="email"
-                    placeholder="Email Address"
-                    required
-                    value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '8px', fontSize: '13px', boxSizing: 'border-box' }}
-                  />
-                )}
                 <input
                   type="tel"
-                  placeholder="WhatsApp Phone Number"
+                  placeholder="WhatsApp Phone Number (e.g., 055XXXXXXX)"
                   required
                   value={custPhone}
                   onChange={(e) => setCustPhone(e.target.value)}
@@ -346,7 +366,7 @@ export default function Storefront() {
 
           {!user ? (
             <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
-              <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '12px' }}>Log in on the Account tab to automatically save and view your orders.</p>
+              <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '12px' }}>Log in on the Account tab to automatically view your order history.</p>
               <button onClick={() => setActiveTab('account')} style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
                 Go to Login
               </button>
@@ -378,30 +398,50 @@ export default function Storefront() {
             {user ? (
               <div>
                 <p style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold', marginTop: 0 }}>Welcome back!</p>
-                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>{user.email}</p>
+                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>{user.phone || 'Logged In Account'}</p>
                 <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
                   Log Out
                 </button>
               </div>
             ) : (
-              <form onSubmit={handleMagicLogin}>
-                <p style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold', marginTop: 0, marginBottom: '6px' }}>Log In / Create Account</p>
-                <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '12px' }}>Enter your email to receive an instant login link. No password required!</p>
+              <form onSubmit={handlePhoneAuth}>
+                <p style={{ color: '#fff', fontSize: '14px', fontWeight: 'bold', marginTop: 0, marginBottom: '6px' }}>
+                  {isSignUp ? 'Create an Account' : 'Log In'}
+                </p>
+                <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '14px' }}>
+                  {isSignUp ? 'Sign up with your phone number and password.' : 'Enter your registered phone number and password.'}
+                </p>
 
                 <input
-                  type="email"
-                  placeholder="Enter your email address"
+                  type="tel"
+                  placeholder="Phone Number (e.g., 055XXXXXXX)"
                   required
-                  value={authEmail}
-                  onChange={(e) => setAuthEmail(e.target.value)}
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
                   style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
                 />
 
-                <button type="submit" style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer' }}>
-                  Send Login Link
+                <input
+                  type="password"
+                  placeholder="Password"
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+
+                <button type="submit" style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', marginBottom: '12px' }}>
+                  {isSignUp ? 'Sign Up' : 'Log In'}
                 </button>
 
-                {authMsg && <p style={{ color: '#38bdf8', fontSize: '12px', marginTop: '10px', marginBottom: 0 }}>{authMsg}</p>}
+                <p
+                  onClick={() => { setIsSignUp(!isSignUp); setAuthMsg(''); }}
+                  style={{ color: '#38bdf8', fontSize: '12px', textAlign: 'center', cursor: 'pointer', margin: 0, textDecoration: 'underline' }}
+                >
+                  {isSignUp ? 'Already have an account? Log In' : "Don't have an account? Sign Up"}
+                </p>
+
+                {authMsg && <p style={{ color: '#38bdf8', fontSize: '12px', marginTop: '12px', marginBottom: 0, textAlign: 'center', fontWeight: 'bold' }}>{authMsg}</p>}
               </form>
             )}
           </div>
