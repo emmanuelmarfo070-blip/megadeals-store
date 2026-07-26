@@ -11,8 +11,8 @@ export default function AdminPage() {
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
-  
-  const [adminTab, setAdminTab] = useState('present'); // 'present' or 'past'
+
+  const [adminTab, setAdminTab] = useState('present');
   const [pName, setPName] = useState('');
   const [pPrice, setPPrice] = useState('');
   const [pSizes, setPSizes] = useState('S, M, L, XL');
@@ -20,19 +20,25 @@ export default function AdminPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
 
-  // Default test password - change this string to whatever secret PIN you want!
+  // Change this string to your secret admin password!
   const ADMIN_SECRET_PIN = '1234';
 
   useEffect(() => {
     if (isUnlocked) {
-      fetchProducts();
+      fetchData();
     }
   }, [isUnlocked]);
 
-  const fetchProducts = async () => {
-    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
-    if (data) setProducts(data);
+  const fetchData = async () => {
+    // Fetch Products
+    const { data: prodData } = await supabase.from('products').select('*').order('id', { ascending: false });
+    if (prodData) setProducts(prodData);
+
+    // Fetch Live Real Orders
+    const { data: orderData } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (orderData) setOrders(orderData);
   };
 
   const handleUnlock = (e) => {
@@ -49,9 +55,7 @@ export default function AdminPage() {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (evt) => {
-        setPhotoBase64(evt.target.result);
-      };
+      reader.onload = (evt) => setPhotoBase64(evt.target.result);
       reader.readAsDataURL(file);
     }
   };
@@ -81,18 +85,17 @@ export default function AdminPage() {
       setPPrice('');
       setPSizes('S, M, L, XL');
       setPhotoBase64('');
-      fetchProducts();
+      fetchData();
     }
   };
 
   const handleDeleteProduct = async (id) => {
     if (confirm('Delete this product from the storefront?')) {
       await supabase.from('products').delete().eq('id', id);
-      fetchProducts();
+      fetchData();
     }
   };
 
-  // 1. PIN LOCK SCREEN
   if (!isUnlocked) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', textAlign: 'center' }}>
@@ -100,7 +103,7 @@ export default function AdminPage() {
           <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔐</div>
           <h2 style={{ fontSize: '18px', color: '#fff', marginBottom: '4px', marginTop: 0 }}>Admin Access</h2>
           <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '16px' }}>
-            Enter secret password to access store management (Default test PIN: <b>1234</b>)
+            Enter secret password to access store management
           </p>
 
           <form onSubmit={handleUnlock}>
@@ -125,7 +128,6 @@ export default function AdminPage() {
     );
   }
 
-  // 2. UNLOCKED ADMIN PANEL
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -138,7 +140,6 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {/* TOP SELECTOR (PRESENT vs PAST) */}
       <div style={{ display: 'flex', background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '4px', marginBottom: '20px' }}>
         <button
           onClick={() => setAdminTab('present')}
@@ -154,7 +155,7 @@ export default function AdminPage() {
             cursor: 'pointer',
           }}
         >
-          🟢 Present Batch (August)
+          🟢 Present Batch
         </button>
         <button
           onClick={() => setAdminTab('past')}
@@ -174,13 +175,12 @@ export default function AdminPage() {
         </button>
       </div>
 
-      {/* TAB 1: PRESENT BATCH */}
       {adminTab === 'present' && (
         <div>
-          {/* Add New Product Section */}
+          {/* Add Goods Form */}
           <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
             <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-              + Add New Goods to Present Drop
+              + Add New Goods to Drop
             </div>
 
             <form onSubmit={handleSaveProduct}>
@@ -209,7 +209,6 @@ export default function AdminPage() {
                 />
               </div>
 
-              {/* Gallery Photo Upload */}
               <div style={{ background: '#09090b', border: '1px dashed #3f3f46', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
                 <label style={{ fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' }}>
                   📷 Pick Product Photo from Gallery:
@@ -239,14 +238,14 @@ export default function AdminPage() {
             </form>
           </div>
 
-          {/* Present Batch Goods List */}
+          {/* Active Goods List */}
           <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
             <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-              Present Batch Goods ({products.length})
+              Active Drop Items ({products.length})
             </div>
 
             {products.length === 0 ? (
-              <p style={{ color: '#71717a', fontSize: '12px' }}>No items in present batch.</p>
+              <p style={{ color: '#71717a', fontSize: '12px' }}>No items added to this drop yet.</p>
             ) : (
               products.map((item) => (
                 <div
@@ -257,7 +256,7 @@ export default function AdminPage() {
                     <img src={item.image_url} alt={item.title} style={{ width: '42px', height: '42px', borderRadius: '6px', objectFit: 'cover' }} />
                     <div>
                       <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{item.title}</div>
-                      <div style={{ fontSize: '11px', color: '#38bdf8' }}>GH₵ {item.price.toFixed(2)} | Sizes: S, M, L, XL</div>
+                      <div style={{ fontSize: '11px', color: '#38bdf8' }}>GH₵ {item.price.toFixed(2)}</div>
                     </div>
                   </div>
                   <button
@@ -271,47 +270,58 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* Customer Orders Received */}
+          {/* Live Customer Orders Table */}
           <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px' }}>
             <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-              Present Buyers & Orders Received
+              Real Buyers & Incoming Orders ({orders.length})
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #27272a', textAlign: 'left' }}>
-                  <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Buyer Info</th>
-                  <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: '1px solid #27272a' }}>
-                  <td style={{ padding: '8px 4px', color: '#fff' }}>kwame@gmail.com</td>
-                  <td style={{ padding: '8px 4px', color: '#4ade80' }}>70% Deposit</td>
-                </tr>
-              </tbody>
-            </table>
+
+            {orders.length === 0 ? (
+              <p style={{ color: '#71717a', fontSize: '12px' }}>No customer orders received yet.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #27272a', textAlign: 'left' }}>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Customer</th>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Items & Plan</th>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Paid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders.map((ord) => (
+                      <tr key={ord.id} style={{ borderBottom: '1px solid #27272a' }}>
+                        <td style={{ padding: '8px 4px', color: '#fff' }}>
+                          <div style={{ fontWeight: 'bold' }}>{ord.customer_name}</div>
+                          <div style={{ fontSize: '10px', color: '#a1a1aa' }}>{ord.customer_phone}</div>
+                        </td>
+                        <td style={{ padding: '8px 4px', color: '#a1a1aa' }}>
+                          <div>{ord.items}</div>
+                          <span style={{ color: ord.deposit_plan === '70%' ? '#4ade80' : '#60a5fa', fontSize: '10px', fontWeight: 'bold' }}>
+                            {ord.deposit_plan} Plan
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 4px', color: '#fff', fontWeight: 'bold' }}>
+                          GH₵ {parseFloat(ord.amount_paid).toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* TAB 2: PAST BATCHES */}
       {adminTab === 'past' && (
-        <div>
-          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>
-              July Batch (Past / Closed)
-            </div>
-            <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '8px' }}>
-              Goods Sold: Acid Wash Cargo Pants, Oversized Hoodies
-            </div>
+        <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px' }}>
+          <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>
+            Past Preorder Batches Archive
           </div>
-
-          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px' }}>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>
-              June Batch (Past / Delivered)
-            </div>
-            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Total Sales Recorded: GH₵ 2,450.00 (14 Buyers)</div>
-          </div>
+          <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0 }}>
+            Once a drop finishes, completed orders will archive here automatically.
+          </p>
         </div>
       )}
     </div>
