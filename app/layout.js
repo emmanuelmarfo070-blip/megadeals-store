@@ -8,12 +8,6 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <head>
-        <Script
-          src="https://js.paystack.co/v1/inline.js"
-          strategy="afterInteractive"
-        />
-      </head>
       <body
         style={{
           margin: 0,
@@ -26,7 +20,11 @@ export default function RootLayout({ children }) {
           boxSizing: 'border-box',
         }}
       >
-        <div style={{ maxWidth: '500px', margin: '0 auto' }}>{children}</div>
+        <Script
+          src="https://js.paystack.co/v1/inline.js"
+          strategy="afterInteractive"
+        />
+        {children}
       </body>
     </html>
   );
