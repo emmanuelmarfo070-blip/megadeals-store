@@ -1,287 +1,475 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-export default function Home() {
-  const [activeTab, setActiveTab] = useState('goods'); // 'goods', 'cart', 'orders'
+const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_KEY || '';
+
+export default function Storefront() {
+  const [activeTab, setActiveTab] = useState('goods');
   const [products, setProducts] = useState([]);
-  const [cart, setCart] = useState([]);
-  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  // Auth State
   const [user, setUser] = useState(null);
+  const [phoneInput, setPhoneInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [authMsg, setAuthMsg] = useState('');
+
+  // Cart & Checkout States
+  const [cart, setCart] = useState([]);
   const [userOrders, setUserOrders] = useState([]);
-  const [depositPlan, setDepositPlan] = useState(70); // 70% or 100%
-  const [activeBatch, setActiveBatch] = useState('Batch 1');
+  const [selectedSizes, setSelectedSizes] = useState({});
+  const [depositPlan, setDepositPlan] = useState(70);
+
+  // Customer Contact Details
+  const [custName, setCustName] = useState('');
+  const [custPhone, setCustPhone] = useState('');
 
   useEffect(() => {
-    fetchProductsAndBatch();
-    checkExistingSession();
+    // Check initial auth status
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user);
+      if (user) {
+        fetchUserCart(user.id);
+        const userPhone = user.user_metadata?.phone_number || user.email?.split('@')[0];
+        fetchUserOrders(userPhone, user.id);
+      }
+    });
+
+    // Auth Listener
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      const currentUser = session?.user || null;
+      setUser(currentUser);
+      if (currentUser) {
+        fetchUserCart(currentUser.id);
+        const userPhone = currentUser.user_metadata?.phone_number || currentUser.email?.split('@')[0];
+        fetchUserOrders(userPhone, currentUser.id);
+      } else {
+        setCart([]);
+        setUserOrders([]);
+      }
+    });
+
+    fetchProducts();
+
+    return () => authListener.subscription.unsubscribe();
   }, []);
 
-  const fetchProductsAndBatch = async () => {
-    const { data: prodData } = await supabase.from('products').select('*');
-    if (prodData) setProducts(prodData);
-
-    const { data: batchData } = await supabase
-      .from('batches')
-      .select('batch_name')
-      .eq('is_active', true)
-      .single();
-    if (batchData) setActiveBatch(batchData.batch_name);
+  const fetchProducts = async () => {
+    setLoading(true);
+    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
+    if (data) setProducts(data);
+    setLoading(false);
   };
 
-  const checkExistingSession = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      setUser(session.user);
-      const cleanPhone = session.user.email.split('@')[0];
-      setPhone(cleanPhone);
-      fetchOrders(cleanPhone, session.user.id);
-    }
+  const fetchUserCart = async (userId) => {
+    const { data } = await supabase.from('carts').select('*').eq('user_id', userId);
+    if (data) setCart(data);
   };
 
-  const fetchOrders = async (phoneNum, userId) => {
+  const fetchUserOrders = async (phone, userId) => {
     const { data } = await supabase
       .from('orders')
       .select('*')
-      .or(`customer_phone.eq.${phoneNum},user_id.eq.${userId}`)
+      .or(`customer_phone.eq.${phone},user_id.eq.${userId}`)
       .order('created_at', { ascending: false });
     if (data) setUserOrders(data);
   };
 
-  const handleAuth = async () => {
-    if (!phone || phone.length < 10) return alert('Enter a valid phone number');
-    const proxyEmail = `${phone.trim()}@megadeals.store`;
-    const defaultPassword = `Megadeals_${phone.trim()}`;
+  const handlePhoneAuth = async (e) => {
+    e.preventDefault();
+    setAuthMsg('Processing...');
 
-    let { data, error } = await supabase.auth.signInWithPassword({
-      email: proxyEmail,
-      password: defaultPassword,
-    });
+    let rawPhone = phoneInput.trim().replace(/\s+/g, '');
+    if (!rawPhone) return setAuthMsg('Please enter a valid phone number.');
 
-    if (error) {
-      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-        email: proxyEmail,
-        password: defaultPassword,
+    // Internal mapping to bypass paid Twilio SMS requirement
+    const internalEmail = `${rawPhone}@megadeals.store`;
+
+    if (isSignUp) {
+      // Sign Up Flow
+      const { data, error } = await supabase.auth.signUp({
+        email: internalEmail,
+        password: passwordInput,
+        options: {
+          data: { phone_number: rawPhone },
+        },
       });
 
-      if (signUpErr) return alert('Auth Error: ' + signUpErr.message);
-      data = signUpData;
-    }
+      if (error) {
+        setAuthMsg(`Error: ${error.message}`);
+      } else {
+        setAuthMsg('🎉 Account created! You are now logged in.');
+      }
+    } else {
+      // Log In Flow
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: internalEmail,
+        password: passwordInput,
+      });
 
-    if (data?.user) {
-      setUser(data.user);
-      fetchOrders(phone.trim(), data.user.id);
-      alert('Logged in successfully!');
+      if (error) {
+        setAuthMsg(`Error: ${error.message}`);
+      } else {
+        setAuthMsg('✅ Logged in successfully!');
+      }
     }
   };
 
-  const rawTotal = cart.reduce((sum, item) => sum + item.price, 0);
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setCart([]);
+    setAuthMsg('');
+  };
+
+  const handleSizeSelect = (productId, size) => {
+    setSelectedSizes({ ...selectedSizes, [productId]: size });
+  };
+
+  const addToCart = async (product) => {
+    const size = selectedSizes[product.id] || 'M';
+    const itemToAdd = { product_id: product.id, title: product.title, price: product.price, size };
+
+    if (user) {
+      const { data, error } = await supabase.from('carts').insert([
+        { user_id: user.id, ...itemToAdd }
+      ]).select();
+
+      if (!error && data) {
+        setCart([...cart, data[0]]);
+      }
+    } else {
+      setCart([...cart, itemToAdd]);
+    }
+
+    alert(`Added ${product.title} (Size: ${size}) to cart!`);
+  };
+
+  const removeFromCart = async (index, cartItemId) => {
+    if (user && cartItemId) {
+      await supabase.from('carts').delete().eq('id', cartItemId);
+    }
+    const newCart = [...cart];
+    newCart.splice(index, 1);
+    setCart(newCart);
+  };
+
+  const rawTotal = cart.reduce((sum, item) => sum + Number(item.price), 0);
   const paymentAmount = depositPlan === 70 ? rawTotal * 0.7 : rawTotal;
 
-  const handleCheckout = () => {
-    if (!user) return alert('Please enter your phone number to log in first.');
-    if (cart.length === 0) return alert('Cart is empty!');
+  const handlePaystackCheckout = (e) => {
+    e.preventDefault();
+
+    if (cart.length === 0) return alert('Your cart is empty!');
+    const userPhone = user?.user_metadata?.phone_number || custPhone;
+    if (!custName || !userPhone) return alert('Please complete your name and phone number!');
+
+    if (typeof window.PaystackPop === 'undefined') {
+      const script = document.createElement('script');
+      script.src = 'https://js.paystack.co/v1/inline.js';
+      script.onload = () => openPaystack(userPhone);
+      document.body.appendChild(script);
+    } else {
+      openPaystack(userPhone);
+    }
+  };
+
+  const openPaystack = (phone) => {
+    const paystackEmail = user?.email || `${phone}@megadeals.store`;
 
     const handler = window.PaystackPop.setup({
-      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-      email: `${phone}@megadeals.store`,
+      key: PAYSTACK_PUBLIC_KEY,
+      email: paystackEmail,
       amount: Math.round(paymentAmount * 100),
       currency: 'GHS',
-      callback: async (response) => {
-        const { error } = await supabase.from('orders').insert([
+      ref: 'MGD-' + Math.floor(Math.random() * 1000000000 + 1),
+      callback: async function (response) {
+        await supabase.from('orders').insert([
           {
-            user_id: user.id,
+            user_id: user ? user.id : null,
+            customer_name: custName,
+            customer_email: paystackEmail,
             customer_phone: phone,
-            items: cart.map((i) => `${i.title} (${i.size})`).join(', '),
             amount_paid: paymentAmount,
-            batch_name: activeBatch,
-            status: depositPlan === 70 ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
+            deposit_plan: `${depositPlan}%`,
+            items: cart.map((i) => `${i.title} (${i.size})`).join(', '),
             paystack_ref: response.reference,
           },
         ]);
 
-        if (!error) {
-          alert('Pre-order placed successfully!');
-          setCart([]);
-          fetchOrders(phone, user.id);
-          setActiveTab('orders');
-        } else {
-          alert('Error saving order: ' + error.message);
+        if (user) {
+          await supabase.from('carts').delete().eq('user_id', user.id);
         }
+        setCart([]);
+        alert(`🎉 Payment Successful! Reference: ${response.reference}`);
+        if (user) fetchUserOrders(phone, user.id);
+        setActiveTab('orders');
+      },
+      onClose: function () {
+        alert('Transaction cancelled.');
       },
     });
+
     handler.openIframe();
   };
 
-  const handlePayBalance = (order, totalDue) => {
-    const handler = window.PaystackPop.setup({
-      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
-      email: `${order.customer_phone}@megadeals.store`,
-      amount: Math.round(totalDue * 100),
-      currency: 'GHS',
-      callback: async () => {
-        await supabase
-          .from('orders')
-          .update({
-            balance_paid: true,
-            status: 'Balance Paid - Processing Delivery',
-          })
-          .eq('id', order.id);
-
-        alert('Balance & Delivery fee paid successfully!');
-        fetchOrders(phone, user.id);
-      },
-    });
-    handler.openIframe();
-  };
+  const displayPhone = user?.user_metadata?.phone_number || user?.email?.split('@')[0];
 
   return (
-    <div style={{ background: '#09090b', color: '#fff', minHeight: '100vh', paddingBottom: '70px', fontFamily: 'sans-serif' }}>
-      <header style={{ padding: '16px', borderBottom: '1px solid #27272a', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#18181b', position: 'sticky', top: 0, zIndex: 10 }}>
-        <h1 style={{ fontSize: '18px', fontWeight: '900', margin: 0, color: '#2563eb' }}>MEGADEALS IMPORTS</h1>
-        <span style={{ fontSize: '11px', background: '#2563eb22', color: '#60a5fa', padding: '4px 8px', borderRadius: '12px', fontWeight: 'bold' }}>{activeBatch}</span>
-      </header>
+    <div style={{ maxWidth: '480px', margin: '0 auto', padding: '16px', paddingBottom: '90px' }}>
+      
+      {/* HEADER */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <div>
+          <h1 style={{ fontSize: '20px', fontWeight: '900', color: '#fff', margin: 0, letterSpacing: '1px' }}>MEGADEALS IMPORTS</h1>
+          <p style={{ fontSize: '11px', color: '#38bdf8', margin: 0, fontWeight: 'bold' }}>
+            {user ? `Logged in: ${displayPhone}` : '⚡ Pre-orders Active'}
+          </p>
+        </div>
+      </div>
 
-      {!user && (
-        <div style={{ padding: '12px 16px', background: '#18181b', borderBottom: '1px solid #27272a', display: 'flex', gap: '8px' }}>
-          <input
-            type="tel"
-            placeholder="Enter Phone Number"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            style={{ flex: 1, padding: '10px', background: '#09090b', border: '1px solid #3f3f46', borderRadius: '8px', color: '#fff' }}
-          />
-          <button onClick={handleAuth} style={{ padding: '10px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold' }}>
-            Login
-          </button>
+      {/* 1. GOODS TAB */}
+      {activeTab === 'goods' && (
+        <div>
+          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Batch Catalog</h2>
+
+          {loading ? (
+            <p style={{ color: '#71717a', fontSize: '13px' }}>Loading products...</p>
+          ) : products.length === 0 ? (
+            <p style={{ color: '#71717a', fontSize: '13px' }}>No items in drop yet.</p>
+          ) : (
+            products.map((item) => {
+              const currentSize = selectedSizes[item.id] || 'M';
+              return (
+                <div key={item.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '14px', marginBottom: '16px' }}>
+                  <img src={item.image_url} alt={item.title} style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
+                  <div style={{ fontWeight: '800', fontSize: '16px', color: '#fff', marginBottom: '4px' }}>{item.title}</div>
+                  <div style={{ color: '#38bdf8', fontWeight: '800', fontSize: '15px', marginBottom: '12px' }}>GH₵ {Number(item.price).toFixed(2)}</div>
+
+                  <div style={{ marginBottom: '12px' }}>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '6px', fontWeight: 'bold' }}>SELECT SIZE:</div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {['S', 'M', 'L', 'XL'].map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => handleSizeSelect(item.id, s)}
+                          style={{
+                            flex: 1,
+                            padding: '6px 0',
+                            background: currentSize === s ? '#2563eb' : '#09090b',
+                            border: `1px solid ${currentSize === s ? '#2563eb' : '#3f3f46'}`,
+                            color: '#fff',
+                            borderRadius: '6px',
+                            fontWeight: 'bold',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => addToCart(item)}
+                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '800', fontSize: '13px', cursor: 'pointer' }}
+                  >
+                    + Add to Cart
+                  </button>
+                </div>
+              );
+            })
+          )}
         </div>
       )}
 
-      <main style={{ padding: '16px' }}>
-        {activeTab === 'goods' && (
-          <div>
-            <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>🔥 Active Pre-order Items</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              {products.map((item) => (
-                <div key={item.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', overflow: 'hidden' }}>
-                  <img src={item.image_url} alt={item.title} style={{ width: '100%', height: '140px', objectFit: 'cover' }} />
-                  <div style={{ padding: '10px' }}>
-                    <h3 style={{ fontSize: '13px', margin: '0 0 4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.title}</h3>
-                    <p style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '14px', margin: '0 0 8px' }}>GH₵ {item.price}</p>
-                    <button
-                      onClick={() => setCart([...cart, { ...item, size: 'M' }])}
-                      style={{ width: '100%', padding: '8px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px' }}
-                    >
-                      + Add to Cart
-                    </button>
+      {/* 2. CART TAB */}
+      {activeTab === 'cart' && (
+        <div>
+          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Your Cart ({cart.length})</h2>
+
+          {cart.length === 0 ? (
+            <p style={{ color: '#71717a', fontSize: '13px' }}>Your cart is empty.</p>
+          ) : (
+            <div>
+              {cart.map((item, idx) => (
+                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#18181b', border: '1px solid #27272a', padding: '10px 14px', borderRadius: '10px', marginBottom: '8px' }}>
+                  <div>
+                    <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{item.title}</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa' }}>
+                      Size: <b style={{ color: '#fff' }}>{item.size}</b> | GH₵ {Number(item.price).toFixed(2)}
+                    </div>
                   </div>
+                  <button onClick={() => removeFromCart(idx, item.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                    Remove
+                  </button>
                 </div>
               ))}
-            </div>
-          </div>
-        )}
 
-        {activeTab === 'cart' && (
-          <div>
-            <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>🛒 Your Shopping Cart</h2>
-            {cart.length === 0 ? <p style={{ color: '#a1a1aa' }}>Your cart is empty.</p> : (
-              <div>
-                {cart.map((item, idx) => (
-                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', background: '#18181b', borderRadius: '8px', marginBottom: '8px', border: '1px solid #27272a' }}>
-                    <div>
-                      <div style={{ fontWeight: 'bold', fontSize: '14px' }}>{item.title}</div>
-                      <div style={{ fontSize: '12px', color: '#a1a1aa' }}>GH₵ {item.price}</div>
-                    </div>
-                    <button onClick={() => setCart(cart.filter((_, i) => i !== idx))} style={{ background: 'none', border: 'none', color: '#ef4444', fontWeight: 'bold' }}>Remove</button>
-                  </div>
-                ))}
-
-                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px', margin: '16px 0' }}>
-                  <div style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold', marginBottom: '8px' }}>SELECT PAYMENT PLAN:</div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => setDepositPlan(70)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 70 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 70 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px' }}>
-                      70% Deposit Now
-                    </button>
-                    <button onClick={() => setDepositPlan(100)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 100 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 100 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px' }}>
-                      100% Full Payment
-                    </button>
-                  </div>
-
-                  <div style={{ marginTop: '14px', borderTop: '1px solid #27272a', paddingTop: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: '800', color: '#4ade80' }}>
-                      <span>Due Now ({depositPlan}%):</span>
-                      <span>GH₵ {paymentAmount.toFixed(2)}</span>
-                    </div>
-                    {depositPlan === 70 && (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#fbbf24', marginTop: '6px' }}>
-                        <span>Balance Due on Arrival (30%):</span>
-                        <span>GH₵ {(rawTotal * 0.3).toFixed(2)}</span>
-                      </div>
-                    )}
-                  </div>
+              {/* Deposit Plan */}
+              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px', margin: '16px 0' }}>
+                <div style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold', marginBottom: '8px' }}>PAYMENT PLAN:</div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => setDepositPlan(70)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 70 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 70 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
+                    70% Deposit
+                  </button>
+                  <button onClick={() => setDepositPlan(100)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 100 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 100 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
+                    100% Full Payment
+                  </button>
                 </div>
 
-                <button onClick={handleCheckout} style={{ width: '100%', padding: '14px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '15px' }}>
-                  💳 Pay Deposit GH₵ {paymentAmount.toFixed(2)}
+                <div style={{ marginTop: '14px', borderTop: '1px solid #27272a', paddingTop: '10px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800', color: '#4ade80' }}>
+                    <span>Amount Due ({depositPlan}%):</span>
+                    <span>GH₵ {paymentAmount.toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Checkout Form */}
+              <form onSubmit={handlePaystackCheckout} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px' }}>
+                <input
+                  type="text"
+                  placeholder="Full Name"
+                  required
+                  value={custName}
+                  onChange={(e) => setCustName(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '8px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+                <input
+                  type="tel"
+                  placeholder="WhatsApp Phone Number (e.g., 055XXXXXXX)"
+                  required
+                  value={custPhone}
+                  onChange={(e) => setCustPhone(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+
+                <button type="submit" style={{ width: '100%', padding: '14px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '14px', cursor: 'pointer' }}>
+                  Pay GH₵ {paymentAmount.toFixed(2)} via Paystack
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. ORDERS TAB */}
+      {activeTab === 'orders' && (
+        <div>
+          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Your Past Orders</h2>
+
+          {!user ? (
+            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
+              <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '12px' }}>Log in on the Account tab to automatically view your order history.</p>
+              <button onClick={() => setActiveTab('account')} style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
+                Go to Login
+              </button>
+            </div>
+          ) : userOrders.length === 0 ? (
+            <p style={{ color: '#71717a', fontSize: '12px' }}>No past orders found for this account.</p>
+          ) : (
+            userOrders.map((ord) => (
+              <div key={ord.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '12px', marginBottom: '10px' }}>
+                <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{ord.items}</div>
+                <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '4px' }}>
+                  Paid: GH₵ {parseFloat(ord.amount_paid).toFixed(2)} ({ord.deposit_plan})
+                </div>
+                <div style={{ fontSize: '10px', color: '#71717a', marginTop: '2px' }}>
+                  Ref: {ord.paystack_ref}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* 4. ACCOUNT TAB */}
+      {activeTab === 'account' && (
+        <div>
+          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Customer Account</h2>
+
+          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '16px' }}>
+            {user ? (
+              <div>
+                <p style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold', marginTop: 0 }}>Welcome back!</p>
+                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>Phone: {displayPhone}</p>
+                <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
+                  Log Out
                 </button>
               </div>
+            ) : (
+              <form onSubmit={handlePhoneAuth}>
+                <p style={{ color: '#fff', fontSize: '14px', fontWeight: 'bold', marginTop: 0, marginBottom: '6px' }}>
+                  {isSignUp ? 'Create an Account' : 'Log In'}
+                </p>
+                <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '14px' }}>
+                  {isSignUp ? 'Sign up with your phone number and password.' : 'Enter your phone number and password.'}
+                </p>
+
+                <input
+                  type="tel"
+                  placeholder="Phone Number (e.g., 055XXXXXXX)"
+                  required
+                  value={phoneInput}
+                  onChange={(e) => setPhoneInput(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+
+                <input
+                  type="password"
+                  placeholder="Password"
+                  required
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+
+                <button type="submit" style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', marginBottom: '12px' }}>
+                  {isSignUp ? 'Sign Up' : 'Log In'}
+                </button>
+
+                <p
+                  onClick={() => { setIsSignUp(!isSignUp); setAuthMsg(''); }}
+                  style={{ color: '#38bdf8', fontSize: '12px', textAlign: 'center', cursor: 'pointer', margin: 0, textDecoration: 'underline' }}
+                >
+                  {isSignUp ? 'Already have an account? Log In' : "Don't have an account? Sign Up"}
+                </p>
+
+                {authMsg && <p style={{ color: '#38bdf8', fontSize: '12px', marginTop: '12px', marginBottom: 0, textAlign: 'center', fontWeight: 'bold' }}>{authMsg}</p>}
+              </form>
             )}
           </div>
-        )}
+        </div>
+      )}
 
-        {activeTab === 'orders' && (
-          <div>
-            <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>📦 Your Pre-order History</h2>
-            {!user ? <p style={{ color: '#a1a1aa' }}>Please log in to view your orders.</p> : userOrders.length === 0 ? <p style={{ color: '#a1a1aa' }}>No orders found.</p> : (
-              userOrders.map((order) => {
-                const remaining30Percent = (order.amount_paid / 0.7) * 0.3;
-                const deliveryFee = order.delivery_fee || 0;
-                const totalDue = remaining30Percent + deliveryFee;
+      {/* BOTTOM NAVIGATION */}
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '65px', background: '#09090b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', alignItems: 'center', maxWidth: '480px', margin: '0 auto', zIndex: 100 }}>
+        {[
+          { id: 'goods', label: 'Goods', icon: '🛍️' },
+          { id: 'cart', label: `Cart (${cart.length})`, icon: '🛒' },
+          { id: 'orders', label: 'Orders', icon: '📦' },
+          { id: 'account', label: user ? 'Account' : 'Login', icon: '👤' },
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{ background: 'none', border: 'none', color: activeTab === tab.id ? '#38bdf8' : '#71717a', fontSize: '11px', fontWeight: 'bold', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', cursor: 'pointer' }}
+          >
+            <span style={{ fontSize: '18px' }}>{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-                return (
-                  <div key={order.id} style={{ background: '#18181b', border: '1px solid #27272a', padding: '14px', borderRadius: '12px', marginBottom: '12px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '11px', color: '#a1a1aa' }}>{order.batch_name}</span>
-                      <span style={{ fontSize: '11px', fontWeight: 'bold', color: order.status.includes('Delivered') ? '#4ade80' : '#fbbf24', background: '#27272a', padding: '4px 8px', borderRadius: '6px' }}>
-                        {order.status}
-                      </span>
-                    </div>
-
-                    <h4 style={{ margin: '8px 0 4px', fontSize: '14px', color: '#fff' }}>{order.items}</h4>
-                    <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0 }}>Deposit Paid: GH₵ {order.amount_paid}</p>
-
-                    {order.status === 'Arrived - Balance Due' && !order.balance_paid && (
-                      <div style={{ marginTop: '12px', borderTop: '1px dashed #3f3f46', paddingTop: '10px' }}>
-                        <div style={{ fontSize: '12px', color: '#e4e4e7', marginBottom: '8px' }}>
-                          <div>30% Balance: <b>GH₵ {remaining30Percent.toFixed(2)}</b></div>
-                          <div>Delivery Fee: <b>GH₵ {deliveryFee.toFixed(2)}</b></div>
-                        </div>
-                        <button
-                          onClick={() => handlePayBalance(order, totalDue)}
-                          style={{ width: '100%', padding: '10px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: '800', cursor: 'pointer' }}
-                        >
-                          💳 Pay GH₵ {totalDue.toFixed(2)} (Balance + Delivery)
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-      </main>
-
-      <nav style={{ position: 'fixed', bottom: 0, width: '100%', height: '60px', background: '#18181b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
-        <button onClick={() => setActiveTab('goods')} style={{ background: 'none', border: 'none', color: activeTab === 'goods' ? '#2563eb' : '#a1a1aa', fontWeight: 'bold' }}>🛍️ Goods</button>
-        <button onClick={() => setActiveTab('cart')} style={{ background: 'none', border: 'none', color: activeTab === 'cart' ? '#2563eb' : '#a1a1aa', fontWeight: 'bold' }}>🛒 Cart ({cart.length})</button>
-        <button onClick={() => setActiveTab('orders')} style={{ background: 'none', border: 'none', color: activeTab === 'orders' ? '#2563eb' : '#a1a1aa', fontWeight: 'bold' }}>📦 Orders</button>
-      </nav>
     </div>
   );
 }
