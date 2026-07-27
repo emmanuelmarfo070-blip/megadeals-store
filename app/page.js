@@ -138,11 +138,8 @@ export default function Storefront() {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
 
-    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || process.env.NEXT_PUBLIC_PAYSTACK_KEY;
-
-    if (!paystackKey) {
-      return alert('Paystack public key is missing in environment variables.');
-    }
+    // Direct fallback to your Paystack test key
+    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
 
     if (typeof window.PaystackPop === 'undefined') {
       return alert('Paystack script is still loading. Please try again in a few seconds.');
@@ -540,4 +537,4 @@ export default function Storefront() {
       </nav>
     </div>
   );
-}
+    }
