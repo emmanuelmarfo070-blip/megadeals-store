@@ -8,14 +8,11 @@ const supabase = createClient(
 );
 
 export default function AdminPanel() {
-  // Passcode Security
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [passcode, setPasscode] = useState('');
 
-  // Admin View Tab
-  const [adminTab, setAdminTab] = useState('present'); // 'present' | 'past'
+  const [adminTab, setAdminTab] = useState('present');
 
-  // Data States
   const [activeBatch, setActiveBatch] = useState(null);
   const [products, setProducts] = useState([]);
   const [currentOrders, setCurrentOrders] = useState([]);
@@ -23,14 +20,12 @@ export default function AdminPanel() {
   const [pastOrders, setPastOrders] = useState([]);
   const [selectedPastBatch, setSelectedPastBatch] = useState(null);
 
-  // New Product Form
   const [newTitle, setNewTitle] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newSizes, setNewSizes] = useState('S, M, L, XL');
   const [imageFile, setImageFile] = useState(null);
   const [uploading, setUploading] = useState(false);
 
-  // New Batch Form
   const [newBatchName, setNewBatchName] = useState('');
 
   useEffect(() => {
@@ -41,7 +36,7 @@ export default function AdminPanel() {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (passcode === '1234') { // Change to your preferred admin passcode
+    if (passcode === 'Emma$1234') {
       setIsAuthenticated(true);
     } else {
       alert('Incorrect passcode!');
@@ -49,24 +44,22 @@ export default function AdminPanel() {
   };
 
   const loadAdminData = async () => {
-    // 1. Fetch Active Batch
     const { data: batchData } = await supabase
       .from('batches')
       .select('*')
       .eq('is_active', true)
-      .single();
+      .maybeSingle();
 
     if (batchData) {
       setActiveBatch(batchData);
 
-      // Fetch products for active batch
       const { data: prodData } = await supabase
         .from('products')
         .select('*')
+        .eq('batch_id', batchData.id)
         .order('id', { ascending: false });
       if (prodData) setProducts(prodData);
 
-      // Fetch ACTIVE orders for current batch
       const { data: ordData } = await supabase
         .from('orders')
         .select('*')
@@ -79,14 +72,12 @@ export default function AdminPanel() {
       setCurrentOrders([]);
     }
 
-    // 2. Fetch All Batches (for Past Batches tab)
     const { data: batchList } = await supabase
       .from('batches')
       .select('*')
       .order('created_at', { ascending: false });
     if (batchList) setAllBatches(batchList);
 
-    // 3. Fetch All Orders
     const { data: allOrd } = await supabase
       .from('orders')
       .select('*')
@@ -94,7 +85,6 @@ export default function AdminPanel() {
     if (allOrd) setPastOrders(allOrd);
   };
 
-  // Add Product to Current Batch
   const handleAddProduct = async (e) => {
     e.preventDefault();
     if (!newTitle || !newPrice) return alert('Fill in title and price');
@@ -145,24 +135,21 @@ export default function AdminPanel() {
     }
   };
 
-  // Remove Product
   const handleRemoveProduct = async (id) => {
     if (!confirm('Remove this product?')) return;
     await supabase.from('products').delete().eq('id', id);
     loadAdminData();
   };
 
-  // End Active Batch
   const handleEndBatch = async () => {
     if (!activeBatch) return;
-    if (!confirm(`Are you sure you want to end "${activeBatch.batch_name}"? This will archive present orders.`)) return;
+    if (!confirm(`Are you sure you want to end "${activeBatch.batch_name}"?`)) return;
 
     await supabase.from('batches').update({ is_active: false }).eq('id', activeBatch.id);
     alert(`Batch "${activeBatch.batch_name}" closed!`);
     loadAdminData();
   };
 
-  // Create New Active Batch
   const handleCreateBatch = async (e) => {
     e.preventDefault();
     if (!newBatchName) return alert('Enter a batch name!');
@@ -182,22 +169,33 @@ export default function AdminPanel() {
     }
   };
 
-  // Delete Individual Order
+  const handleStatusChange = async (orderId, newStatus) => {
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: newStatus })
+      .eq('id', orderId);
+
+    if (error) {
+      alert('Failed to update status: ' + error.message);
+    } else {
+      loadAdminData();
+    }
+  };
+
   const handleDeleteOrder = async (orderId) => {
-    if (!confirm('Are you sure you want to delete this order?')) return;
+    if (!confirm('Delete this order?')) return;
 
     const { error } = await supabase.from('orders').delete().eq('id', orderId);
     if (error) {
       alert('Error deleting order: ' + error.message);
     } else {
-      alert('Order deleted successfully!');
+      alert('Order deleted!');
       loadAdminData();
     }
   };
 
-  // Delete Batch
   const handleDeleteBatch = async (batchId, batchName) => {
-    if (!confirm(`Delete batch "${batchName}"? This does not delete customer orders associated with it.`)) return;
+    if (!confirm(`Delete batch "${batchName}"?`)) return;
 
     const { error } = await supabase.from('batches').delete().eq('id', batchId);
     if (error) {
@@ -233,7 +231,6 @@ export default function AdminPanel() {
     <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       <div style={{ maxWidth: '600px', margin: '0 auto' }}>
 
-        {/* HEADER */}
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <h1 style={{ fontSize: '18px', fontWeight: 900 }}>STORE ADMIN PANEL</h1>
           <button onClick={() => setIsAuthenticated(false)} style={{ background: '#27272a', border: 'none', color: '#a1a1aa', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
@@ -241,7 +238,6 @@ export default function AdminPanel() {
           </button>
         </header>
 
-        {/* TAB SWITCHER */}
         <div style={{ display: 'flex', gap: '8px', background: '#18181b', padding: '4px', borderRadius: '12px', marginBottom: '20px', border: '1px solid #27272a' }}>
           <button
             onClick={() => setAdminTab('present')}
@@ -277,7 +273,6 @@ export default function AdminPanel() {
           </button>
         </div>
 
-        {/* ================= TAB 1: PRESENT BATCH ================= */}
         {adminTab === 'present' && (
           <div>
             {!activeBatch ? (
@@ -298,7 +293,6 @@ export default function AdminPanel() {
               </div>
             ) : (
               <div>
-                {/* ADD GOODS CARD */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <span style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8' }}>+ ADD NEW GOODS TO {activeBatch.batch_name.toUpperCase()}</span>
@@ -310,7 +304,7 @@ export default function AdminPanel() {
                   <form onSubmit={handleAddProduct}>
                     <input
                       type="text"
-                      placeholder="Product Name (e.g. Graphic Hoodie)"
+                      placeholder="Product Name"
                       value={newTitle}
                       onChange={(e) => setNewTitle(e.target.value)}
                       style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
@@ -346,13 +340,12 @@ export default function AdminPanel() {
                   </form>
                 </div>
 
-                {/* PRESENT GOODS LIST */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
                     PRESENT BATCH GOODS ({products.length})
                   </h3>
                   {products.length === 0 ? (
-                    <p style={{ fontSize: '12px', color: '#71717a' }}>No products added to this active batch yet.</p>
+                    <p style={{ fontSize: '12px', color: '#71717a' }}>No products added to this batch yet.</p>
                   ) : (
                     products.map((p) => (
                       <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '10px', marginBottom: '8px' }}>
@@ -369,14 +362,13 @@ export default function AdminPanel() {
                   )}
                 </div>
 
-                {/* PRESENT BUYERS & ORDERS */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
-                    PRESENT BUYERS & ORDERS RECEIVED ({currentOrders.length})
+                    PRESENT BUYERS & ORDERS ({currentOrders.length})
                   </h3>
 
                   {currentOrders.length === 0 ? (
-                    <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this active batch yet.</p>
+                    <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this batch yet.</p>
                   ) : (
                     currentOrders.map((ord) => (
                       <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
@@ -385,8 +377,19 @@ export default function AdminPanel() {
                           <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
                         </div>
                         <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                          <span style={{ fontSize: '11px', color: '#60a5fa' }}>Status: {ord.status}</span>
+                        
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                          <select
+                            value={ord.status || 'Paid'}
+                            onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                            style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
+                          >
+                            <option value="Paid">Paid 💳</option>
+                            <option value="Processing">Processing 📦</option>
+                            <option value="Shipped">Shipped ✈️</option>
+                            <option value="Delivered">Delivered ✅</option>
+                          </select>
+
                           <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
                             Delete Order 🗑️
                           </button>
@@ -400,14 +403,12 @@ export default function AdminPanel() {
           </div>
         )}
 
-        {/* ================= TAB 2: PAST ORDERS & BATCHES ================= */}
         {adminTab === 'past' && (
           <div>
             <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
               BATCHES & HISTORY
             </h3>
 
-            {/* BATCH SELECTOR CARDS */}
             <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '16px' }}>
               <button
                 onClick={() => setSelectedPastBatch(null)}
@@ -451,26 +452,35 @@ export default function AdminPanel() {
               ))}
             </div>
 
-            {/* ORDERS TABLE */}
             <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 0.4fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.4fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
                 <span>Buyer / Batch</span>
                 <span>Item</span>
-                <span style={{ textAlign: 'right' }}>Total Paid</span>
+                <span>Status / Total</span>
                 <span style={{ textAlign: 'right' }}>Action</span>
               </div>
 
               {pastOrders
                 .filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
                 .map((ord) => (
-                  <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 0.4fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
+                  <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.4fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
                     <div>
                       <div style={{ fontWeight: 'bold', color: '#fff' }}>{ord.customer_name || ord.customer_phone}</div>
                       <div style={{ fontSize: '10px', color: '#38bdf8' }}>{ord.batch_name}</div>
                     </div>
                     <div style={{ color: '#a1a1aa' }}>{ord.items}</div>
-                    <div style={{ textAlign: 'right', fontWeight: 'bold', color: '#4ade80' }}>
-                      GH₵ {ord.amount_paid}
+                    <div>
+                      <div style={{ fontWeight: 'bold', color: '#4ade80' }}>GH₵ {ord.amount_paid}</div>
+                      <select
+                        value={ord.status || 'Paid'}
+                        onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                        style={{ background: '#09090b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '4px', padding: '2px 4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}
+                      >
+                        <option value="Paid">Paid 💳</option>
+                        <option value="Processing">Processing 📦</option>
+                        <option value="Shipped">Shipped ✈️</option>
+                        <option value="Delivered">Delivered ✅</option>
+                      </select>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <button
@@ -490,4 +500,4 @@ export default function AdminPanel() {
       </div>
     </div>
   );
-  }
+}
