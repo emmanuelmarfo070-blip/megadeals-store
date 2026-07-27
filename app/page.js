@@ -1,6 +1,5 @@
 'use client';
 import { useState, useEffect } from 'react';
-import Script from 'next/script';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
@@ -18,7 +17,7 @@ export default function Storefront() {
   const [userOrders, setUserOrders] = useState([]);
   const [user, setUser] = useState(null);
 
-  // Selection & Cart State
+  // Selection & Cart State (Loaded from localStorage)
   const [selectedSizes, setSelectedSizes] = useState({});
   const [cart, setCart] = useState([]);
   const [depositOption, setDepositOption] = useState('70'); // '70' or '100'
@@ -33,10 +32,37 @@ export default function Storefront() {
   const [authPassword, setAuthPassword] = useState('');
   const [authPhoneInput, setAuthPhoneInput] = useState('');
 
+  // Load Paystack Script dynamically on mount
   useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v1/inline.js';
+    script.async = true;
+    document.body.appendChild(script);
+
+    // Load saved cart from localStorage if present
+    const savedCart = localStorage.getItem('megadeals_cart');
+    if (savedCart) {
+      try {
+        setCart(JSON.parse(savedCart));
+      } catch (e) {
+        console.error('Error loading cart', e);
+      }
+    }
+
     loadStorefrontData();
     checkCurrentUser();
+
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
   }, []);
+
+  // Sync cart changes to localStorage
+  useEffect(() => {
+    localStorage.setItem('megadeals_cart', JSON.stringify(cart));
+  }, [cart]);
 
   const loadStorefrontData = async () => {
     // 1. Fetch Active Batch
@@ -55,7 +81,6 @@ export default function Storefront() {
 
     if (prodData) {
       setProducts(prodData);
-      // Initialize default selected size (first available size per product)
       const initialSizes = {};
       prodData.forEach((p) => {
         const sizeList = p.sizes ? p.sizes.split(',').map((s) => s.trim()) : ['S', 'M', 'L', 'XL'];
@@ -113,12 +138,18 @@ export default function Storefront() {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
 
+    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || process.env.NEXT_PUBLIC_PAYSTACK_KEY;
+
+    if (!paystackKey) {
+      return alert('Paystack public key is missing in environment variables.');
+    }
+
     if (typeof window.PaystackPop === 'undefined') {
-      return alert('Paystack library loading. Please try again in 3 seconds.');
+      return alert('Paystack script is still loading. Please try again in a few seconds.');
     }
 
     const handler = window.PaystackPop.setup({
-      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || 'pk_test_xxx',
+      key: paystackKey,
       email: user ? user.email : `${custPhone}@megadeals.com`,
       amount: Math.round(paymentAmount * 100), // convert GH₵ to pesewas
       currency: 'GHS',
@@ -142,6 +173,7 @@ export default function Storefront() {
         ]);
 
         setCart([]);
+        localStorage.removeItem('megadeals_cart');
         setActiveTab('page-orders');
         if (user) fetchUserOrders(user.email);
       },
@@ -192,10 +224,6 @@ export default function Storefront() {
 
   return (
     <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', paddingBottom: '90px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-      
-      {/* Paystack Inline Script Loader */}
-      <Script src="https://js.paystack.co/v1/inline.js" strategy="lazyOnload" />
-
       <div style={{ maxWidth: '500px', margin: '0 auto' }}>
 
         {/* HEADER */}
@@ -339,7 +367,7 @@ export default function Storefront() {
                 onClick={handlePaystackCheckout}
                 style={{ width: '100%', padding: '14px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '15px', cursor: 'pointer', marginTop: '14px' }}
               >
-                Pay GH₵ {paymentAmount.toFixed(2)} via Paystack
+                Pay GH₵ {paymentAmount.toFixed(2)} via MoMo / Card
               </button>
             </div>
           </div>
