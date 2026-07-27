@@ -41,7 +41,7 @@ export default function AdminPanel() {
 
   const handleLogin = (e) => {
     e.preventDefault();
-    if (passcode === '1234') { // Change this to your preferred admin password
+    if (passcode === '1234') { // Change to your preferred admin passcode
       setIsAuthenticated(true);
     } else {
       alert('Incorrect passcode!');
@@ -157,9 +157,7 @@ export default function AdminPanel() {
     if (!activeBatch) return;
     if (!confirm(`Are you sure you want to end "${activeBatch.batch_name}"? This will archive present orders.`)) return;
 
-    // Mark current batch inactive
     await supabase.from('batches').update({ is_active: false }).eq('id', activeBatch.id);
-
     alert(`Batch "${activeBatch.batch_name}" closed!`);
     loadAdminData();
   };
@@ -169,10 +167,8 @@ export default function AdminPanel() {
     e.preventDefault();
     if (!newBatchName) return alert('Enter a batch name!');
 
-    // First deactivate any existing active batch
     await supabase.from('batches').update({ is_active: false }).eq('is_active', true);
 
-    // Insert new active batch
     const { error } = await supabase.from('batches').insert([
       { batch_name: newBatchName, is_active: true }
     ]);
@@ -182,6 +178,33 @@ export default function AdminPanel() {
     } else {
       alert(`New active drop "${newBatchName}" created!`);
       setNewBatchName('');
+      loadAdminData();
+    }
+  };
+
+  // Delete Individual Order
+  const handleDeleteOrder = async (orderId) => {
+    if (!confirm('Are you sure you want to delete this order?')) return;
+
+    const { error } = await supabase.from('orders').delete().eq('id', orderId);
+    if (error) {
+      alert('Error deleting order: ' + error.message);
+    } else {
+      alert('Order deleted successfully!');
+      loadAdminData();
+    }
+  };
+
+  // Delete Batch
+  const handleDeleteBatch = async (batchId, batchName) => {
+    if (!confirm(`Delete batch "${batchName}"? This does not delete customer orders associated with it.`)) return;
+
+    const { error } = await supabase.from('batches').delete().eq('id', batchId);
+    if (error) {
+      alert('Error deleting batch: ' + error.message);
+    } else {
+      alert('Batch deleted!');
+      if (selectedPastBatch === batchName) setSelectedPastBatch(null);
       loadAdminData();
     }
   };
@@ -362,7 +385,12 @@ export default function AdminPanel() {
                           <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
                         </div>
                         <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
-                        <div style={{ fontSize: '11px', color: '#60a5fa', marginTop: '4px' }}>Status: {ord.status}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
+                          <span style={{ fontSize: '11px', color: '#60a5fa' }}>Status: {ord.status}</span>
+                          <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                            Delete Order 🗑️
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -398,38 +426,44 @@ export default function AdminPanel() {
                 All Orders ({pastOrders.length})
               </button>
               {allBatches.map((b) => (
-                <button
-                  key={b.id}
-                  onClick={() => setSelectedPastBatch(b.batch_name)}
-                  style={{
-                    padding: '8px 14px',
-                    background: selectedPastBatch === b.batch_name ? '#2563eb' : '#18181b',
-                    color: selectedPastBatch === b.batch_name ? '#fff' : '#a1a1aa',
-                    border: '1px solid #27272a',
-                    borderRadius: '20px',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    whiteSpace: 'nowrap',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {b.batch_name} {!b.is_active && '(Closed)'}
-                </button>
+                <div key={b.id} style={{ display: 'flex', alignItems: 'center', background: selectedPastBatch === b.batch_name ? '#2563eb' : '#18181b', border: '1px solid #27272a', borderRadius: '20px', paddingRight: '6px' }}>
+                  <button
+                    onClick={() => setSelectedPastBatch(b.batch_name)}
+                    style={{
+                      padding: '8px 10px 8px 14px',
+                      background: 'none',
+                      color: selectedPastBatch === b.batch_name ? '#fff' : '#a1a1aa',
+                      border: 'none',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      whiteSpace: 'nowrap',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {b.batch_name} {!b.is_active && '(Closed)'}
+                  </button>
+                  {!b.is_active && (
+                    <button onClick={() => handleDeleteBatch(b.id, b.batch_name)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', cursor: 'pointer', padding: '0 4px' }}>
+                      ✕
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
 
             {/* ORDERS TABLE */}
             <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 0.4fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
                 <span>Buyer / Batch</span>
                 <span>Item</span>
                 <span style={{ textAlign: 'right' }}>Total Paid</span>
+                <span style={{ textAlign: 'right' }}>Action</span>
               </div>
 
               {pastOrders
                 .filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
                 .map((ord) => (
-                  <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
+                  <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 0.8fr 0.4fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
                     <div>
                       <div style={{ fontWeight: 'bold', color: '#fff' }}>{ord.customer_name || ord.customer_phone}</div>
                       <div style={{ fontSize: '10px', color: '#38bdf8' }}>{ord.batch_name}</div>
@@ -437,6 +471,15 @@ export default function AdminPanel() {
                     <div style={{ color: '#a1a1aa' }}>{ord.items}</div>
                     <div style={{ textAlign: 'right', fontWeight: 'bold', color: '#4ade80' }}>
                       GH₵ {ord.amount_paid}
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <button
+                        onClick={() => handleDeleteOrder(ord.id)}
+                        style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '13px', cursor: 'pointer' }}
+                        title="Delete Order"
+                      >
+                        🗑️
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -447,4 +490,4 @@ export default function AdminPanel() {
       </div>
     </div>
   );
-}
+  }
