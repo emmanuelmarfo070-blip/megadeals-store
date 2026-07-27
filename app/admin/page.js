@@ -85,6 +85,32 @@ export default function AdminPanel() {
     if (allOrd) setPastOrders(allOrd);
   };
 
+  const handleBatchStatusChange = async (batchId, newStatus) => {
+    const { error } = await supabase
+      .from('batches')
+      .update({ status: newStatus })
+      .eq('id', batchId);
+
+    if (error) {
+      alert('Failed to update batch status: ' + error.message);
+    } else {
+      loadAdminData();
+    }
+  };
+
+  const handleOrderStatusChange = async (orderId, newStatus) => {
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: newStatus })
+      .eq('id', orderId);
+
+    if (error) {
+      alert('Failed to update order status: ' + error.message);
+    } else {
+      loadAdminData();
+    }
+  };
+
   const handleAddProduct = async (e) => {
     e.preventDefault();
     if (!newTitle || !newPrice) return alert('Fill in title and price');
@@ -157,7 +183,7 @@ export default function AdminPanel() {
     await supabase.from('batches').update({ is_active: false }).eq('is_active', true);
 
     const { error } = await supabase.from('batches').insert([
-      { batch_name: newBatchName, is_active: true }
+      { batch_name: newBatchName, is_active: true, status: 'Processing' }
     ]);
 
     if (error) {
@@ -165,19 +191,6 @@ export default function AdminPanel() {
     } else {
       alert(`New active drop "${newBatchName}" created!`);
       setNewBatchName('');
-      loadAdminData();
-    }
-  };
-
-  const handleStatusChange = async (orderId, newStatus) => {
-    const { error } = await supabase
-      .from('orders')
-      .update({ status: newStatus })
-      .eq('id', orderId);
-
-    if (error) {
-      alert('Failed to update status: ' + error.message);
-    } else {
       loadAdminData();
     }
   };
@@ -293,6 +306,24 @@ export default function AdminPanel() {
               </div>
             ) : (
               <div>
+                {/* GENERAL BATCH SHIPPING STATUS */}
+                <div style={{ background: '#18181b', border: '1px solid #2563eb', borderRadius: '16px', padding: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 800 }}>GENERAL BATCH SHIPPING STATUS</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Applies to all orders in {activeBatch.batch_name}</div>
+                  </div>
+                  <select
+                    value={activeBatch.status || 'Processing'}
+                    onChange={(e) => handleBatchStatusChange(activeBatch.id, e.target.value)}
+                    style={{ background: '#09090b', color: '#38bdf8', border: '1px solid #2563eb', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    <option value="Processing">Processing 📦</option>
+                    <option value="Shipped">Shipped ✈️</option>
+                    <option value="Delivered">Delivered ✅</option>
+                  </select>
+                </div>
+
+                {/* ADD PRODUCT FORM */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                     <span style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8' }}>+ ADD NEW GOODS TO {activeBatch.batch_name.toUpperCase()}</span>
@@ -340,6 +371,7 @@ export default function AdminPanel() {
                   </form>
                 </div>
 
+                {/* ACTIVE PRODUCTS LIST */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
                     PRESENT BATCH GOODS ({products.length})
@@ -362,6 +394,7 @@ export default function AdminPanel() {
                   )}
                 </div>
 
+                {/* CURRENT ORDERS LIST */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
                     PRESENT BUYERS & ORDERS ({currentOrders.length})
@@ -381,12 +414,10 @@ export default function AdminPanel() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
                           <select
                             value={ord.status || 'Paid'}
-                            onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                            onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
                             style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
                           >
                             <option value="Paid">Paid 💳</option>
-                            <option value="Processing">Processing 📦</option>
-                            <option value="Shipped">Shipped ✈️</option>
                             <option value="Delivered">Delivered ✅</option>
                           </select>
 
@@ -473,12 +504,10 @@ export default function AdminPanel() {
                       <div style={{ fontWeight: 'bold', color: '#4ade80' }}>GH₵ {ord.amount_paid}</div>
                       <select
                         value={ord.status || 'Paid'}
-                        onChange={(e) => handleStatusChange(ord.id, e.target.value)}
+                        onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
                         style={{ background: '#09090b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '4px', padding: '2px 4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}
                       >
                         <option value="Paid">Paid 💳</option>
-                        <option value="Processing">Processing 📦</option>
-                        <option value="Shipped">Shipped ✈️</option>
                         <option value="Delivered">Delivered ✅</option>
                       </select>
                     </div>
