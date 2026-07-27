@@ -1,475 +1,515 @@
 'use client';
-
 import { useState, useEffect } from 'react';
+import Script from 'next/script';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-const PAYSTACK_PUBLIC_KEY = process.env.NEXT_PUBLIC_PAYSTACK_KEY || '';
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 export default function Storefront() {
-  const [activeTab, setActiveTab] = useState('goods');
+  // Navigation State
+  const [activeTab, setActiveTab] = useState('page-goods');
+
+  // Database & Dynamic Data
+  const [activeBatchName, setActiveBatchName] = useState('AUGUST DROP');
   const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  // Auth State
-  const [user, setUser] = useState(null);
-  const [phoneInput, setPhoneInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [authMsg, setAuthMsg] = useState('');
-
-  // Cart & Checkout States
-  const [cart, setCart] = useState([]);
   const [userOrders, setUserOrders] = useState([]);
-  const [selectedSizes, setSelectedSizes] = useState({});
-  const [depositPlan, setDepositPlan] = useState(70);
+  const [user, setUser] = useState(null);
 
-  // Customer Contact Details
+  // Selection & Cart State
+  const [selectedSizes, setSelectedSizes] = useState({});
+  const [cart, setCart] = useState([]);
+  const [depositOption, setDepositOption] = useState('70'); // '70' or '100'
+
+  // Checkout Inputs
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
 
+  // Authentication State
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup'
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authPhoneInput, setAuthPhoneInput] = useState('');
+
   useEffect(() => {
-    // Check initial auth status
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
-      if (user) {
-        fetchUserCart(user.id);
-        const userPhone = user.user_metadata?.phone_number || user.email?.split('@')[0];
-        fetchUserOrders(userPhone, user.id);
-      }
-    });
-
-    // Auth Listener
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      const currentUser = session?.user || null;
-      setUser(currentUser);
-      if (currentUser) {
-        fetchUserCart(currentUser.id);
-        const userPhone = currentUser.user_metadata?.phone_number || currentUser.email?.split('@')[0];
-        fetchUserOrders(userPhone, currentUser.id);
-      } else {
-        setCart([]);
-        setUserOrders([]);
-      }
-    });
-
-    fetchProducts();
-
-    return () => authListener.subscription.unsubscribe();
+    loadStorefrontData();
+    checkCurrentUser();
   }, []);
 
-  const fetchProducts = async () => {
-    setLoading(true);
-    const { data } = await supabase.from('products').select('*').order('id', { ascending: false });
-    if (data) setProducts(data);
-    setLoading(false);
+  const loadStorefrontData = async () => {
+    // 1. Fetch Active Batch
+    const { data: batchData } = await supabase
+      .from('batches')
+      .select('batch_name')
+      .eq('is_active', true)
+      .single();
+    if (batchData) setActiveBatchName(batchData.batch_name);
+
+    // 2. Fetch Store Products
+    const { data: prodData } = await supabase
+      .from('products')
+      .select('*')
+      .order('id', { ascending: false });
+
+    if (prodData) {
+      setProducts(prodData);
+      // Initialize default selected size (first available size per product)
+      const initialSizes = {};
+      prodData.forEach((p) => {
+        const sizeList = p.sizes ? p.sizes.split(',').map((s) => s.trim()) : ['S', 'M', 'L', 'XL'];
+        initialSizes[p.id] = sizeList[0] || 'M';
+      });
+      setSelectedSizes(initialSizes);
+    }
   };
 
-  const fetchUserCart = async (userId) => {
-    const { data } = await supabase.from('carts').select('*').eq('user_id', userId);
-    if (data) setCart(data);
+  const checkCurrentUser = async () => {
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (currentUser) {
+      setUser(currentUser);
+      fetchUserOrders(currentUser.email);
+    }
   };
 
-  const fetchUserOrders = async (phone, userId) => {
+  const fetchUserOrders = async (email) => {
     const { data } = await supabase
       .from('orders')
       .select('*')
-      .or(`customer_phone.eq.${phone},user_id.eq.${userId}`)
+      .eq('customer_email', email)
       .order('created_at', { ascending: false });
+
     if (data) setUserOrders(data);
   };
 
-  const handlePhoneAuth = async (e) => {
-    e.preventDefault();
-    setAuthMsg('Processing...');
-
-    let rawPhone = phoneInput.trim().replace(/\s+/g, '');
-    if (!rawPhone) return setAuthMsg('Please enter a valid phone number.');
-
-    // Internal mapping to bypass paid Twilio SMS requirement
-    const internalEmail = `${rawPhone}@megadeals.store`;
-
-    if (isSignUp) {
-      // Sign Up Flow
-      const { data, error } = await supabase.auth.signUp({
-        email: internalEmail,
-        password: passwordInput,
-        options: {
-          data: { phone_number: rawPhone },
-        },
-      });
-
-      if (error) {
-        setAuthMsg(`Error: ${error.message}`);
-      } else {
-        setAuthMsg('🎉 Account created! You are now logged in.');
-      }
-    } else {
-      // Log In Flow
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: internalEmail,
-        password: passwordInput,
-      });
-
-      if (error) {
-        setAuthMsg(`Error: ${error.message}`);
-      } else {
-        setAuthMsg('✅ Logged in successfully!');
-      }
-    }
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setUser(null);
-    setCart([]);
-    setAuthMsg('');
-  };
-
+  // --- Size Handling ---
   const handleSizeSelect = (productId, size) => {
-    setSelectedSizes({ ...selectedSizes, [productId]: size });
+    setSelectedSizes((prev) => ({ ...prev, [productId]: size }));
   };
 
-  const addToCart = async (product) => {
-    const size = selectedSizes[product.id] || 'M';
-    const itemToAdd = { product_id: product.id, title: product.title, price: product.price, size };
-
-    if (user) {
-      const { data, error } = await supabase.from('carts').insert([
-        { user_id: user.id, ...itemToAdd }
-      ]).select();
-
-      if (!error && data) {
-        setCart([...cart, data[0]]);
-      }
-    } else {
-      setCart([...cart, itemToAdd]);
-    }
-
-    alert(`Added ${product.title} (Size: ${size}) to cart!`);
+  // --- Cart Actions ---
+  const handleAddToCart = (product) => {
+    const chosenSize = selectedSizes[product.id] || 'M';
+    const newItem = {
+      id: product.id,
+      title: product.title,
+      price: Number(product.price),
+      size: chosenSize,
+    };
+    setCart((prev) => [...prev, newItem]);
+    alert(`Added "${product.title}" (Size: ${chosenSize}) to Cart!`);
   };
 
-  const removeFromCart = async (index, cartItemId) => {
-    if (user && cartItemId) {
-      await supabase.from('carts').delete().eq('id', cartItemId);
-    }
-    const newCart = [...cart];
-    newCart.splice(index, 1);
-    setCart(newCart);
+  const handleRemoveFromCart = (index) => {
+    setCart((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const rawTotal = cart.reduce((sum, item) => sum + Number(item.price), 0);
-  const paymentAmount = depositPlan === 70 ? rawTotal * 0.7 : rawTotal;
+  const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
+  const paymentAmount = depositOption === '70' ? subtotal * 0.7 : subtotal;
 
-  const handlePaystackCheckout = (e) => {
-    e.preventDefault();
-
+  // --- Paystack Payment Integration ---
+  const handlePaystackCheckout = () => {
     if (cart.length === 0) return alert('Your cart is empty!');
-    const userPhone = user?.user_metadata?.phone_number || custPhone;
-    if (!custName || !userPhone) return alert('Please complete your name and phone number!');
+    if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
 
     if (typeof window.PaystackPop === 'undefined') {
-      const script = document.createElement('script');
-      script.src = 'https://js.paystack.co/v1/inline.js';
-      script.onload = () => openPaystack(userPhone);
-      document.body.appendChild(script);
-    } else {
-      openPaystack(userPhone);
+      return alert('Paystack library loading. Please try again in 3 seconds.');
     }
-  };
-
-  const openPaystack = (phone) => {
-    const paystackEmail = user?.email || `${phone}@megadeals.store`;
 
     const handler = window.PaystackPop.setup({
-      key: PAYSTACK_PUBLIC_KEY,
-      email: paystackEmail,
-      amount: Math.round(paymentAmount * 100),
+      key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || 'pk_test_xxx',
+      email: user ? user.email : `${custPhone}@megadeals.com`,
+      amount: Math.round(paymentAmount * 100), // convert GH₵ to pesewas
       currency: 'GHS',
-      ref: 'MGD-' + Math.floor(Math.random() * 1000000000 + 1),
+      ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
       callback: async function (response) {
+        alert('Payment successful! Reference: ' + response.reference);
+
+        // Record order in Supabase
+        const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
         await supabase.from('orders').insert([
           {
-            user_id: user ? user.id : null,
             customer_name: custName,
-            customer_email: paystackEmail,
-            customer_phone: phone,
+            customer_phone: custPhone,
+            customer_email: user ? user.email : '',
+            items: itemSummary,
             amount_paid: paymentAmount,
-            deposit_plan: `${depositPlan}%`,
-            items: cart.map((i) => `${i.title} (${i.size})`).join(', '),
-            paystack_ref: response.reference,
+            deposit_percentage: depositOption,
+            batch_name: activeBatchName,
+            status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
           },
         ]);
 
-        if (user) {
-          await supabase.from('carts').delete().eq('user_id', user.id);
-        }
         setCart([]);
-        alert(`🎉 Payment Successful! Reference: ${response.reference}`);
-        if (user) fetchUserOrders(phone, user.id);
-        setActiveTab('orders');
+        setActiveTab('page-orders');
+        if (user) fetchUserOrders(user.email);
       },
       onClose: function () {
-        alert('Transaction cancelled.');
+        alert('Payment cancelled.');
       },
     });
 
     handler.openIframe();
   };
 
-  const displayPhone = user?.user_metadata?.phone_number || user?.email?.split('@')[0];
+  // --- Auth Handlers ---
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    if (authMode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({
+        email: authEmail,
+        password: authPassword,
+        options: { data: { phone: authPhoneInput } },
+      });
+      if (error) alert('Registration Error: ' + error.message);
+      else {
+        alert('Account registered successfully!');
+        setUser(data.user);
+        setActiveTab('page-goods');
+      }
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      });
+      if (error) alert('Login Error: ' + error.message);
+      else {
+        alert('Logged in successfully!');
+        setUser(data.user);
+        fetchUserOrders(data.user.email);
+        setActiveTab('page-goods');
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setUserOrders([]);
+    alert('Logged out');
+  };
 
   return (
-    <div style={{ maxWidth: '480px', margin: '0 auto', padding: '16px', paddingBottom: '90px' }}>
+    <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', paddingBottom: '90px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       
-      {/* HEADER */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <div>
-          <h1 style={{ fontSize: '20px', fontWeight: '900', color: '#fff', margin: 0, letterSpacing: '1px' }}>MEGADEALS IMPORTS</h1>
-          <p style={{ fontSize: '11px', color: '#38bdf8', margin: 0, fontWeight: 'bold' }}>
-            {user ? `Logged in: ${displayPhone}` : '⚡ Pre-orders Active'}
-          </p>
-        </div>
-      </div>
+      {/* Paystack Inline Script Loader */}
+      <Script src="https://js.paystack.co/v1/inline.js" strategy="lazyOnload" />
 
-      {/* 1. GOODS TAB */}
-      {activeTab === 'goods' && (
-        <div>
-          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Batch Catalog</h2>
+      <div style={{ maxWidth: '500px', margin: '0 auto' }}>
 
-          {loading ? (
-            <p style={{ color: '#71717a', fontSize: '13px' }}>Loading products...</p>
-          ) : products.length === 0 ? (
-            <p style={{ color: '#71717a', fontSize: '13px' }}>No items in drop yet.</p>
-          ) : (
-            products.map((item) => {
-              const currentSize = selectedSizes[item.id] || 'M';
-              return (
-                <div key={item.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '14px', marginBottom: '16px' }}>
-                  <img src={item.image_url} alt={item.title} style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '12px', marginBottom: '12px' }} />
-                  <div style={{ fontWeight: '800', fontSize: '16px', color: '#fff', marginBottom: '4px' }}>{item.title}</div>
-                  <div style={{ color: '#38bdf8', fontWeight: '800', fontSize: '15px', marginBottom: '12px' }}>GH₵ {Number(item.price).toFixed(2)}</div>
+        {/* HEADER */}
+        <header style={{ textAlign: 'center', borderBottom: '1px solid #27272a', paddingBottom: '14px', marginBottom: '20px' }}>
+          <h1 style={{ fontSize: '20px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' }}>PREORDER STORE</h1>
+          <span style={{ display: 'inline-block', background: '#166534', color: '#4ade80', fontSize: '11px', padding: '4px 10px', borderRadius: '20px', marginTop: '6px', fontWeight: 700 }}>
+            🟢 {activeBatchName.toUpperCase()} DROP LIVE
+          </span>
+        </header>
 
-                  <div style={{ marginBottom: '12px' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '6px', fontWeight: 'bold' }}>SELECT SIZE:</div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      {['S', 'M', 'L', 'XL'].map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => handleSizeSelect(item.id, s)}
-                          style={{
-                            flex: 1,
-                            padding: '6px 0',
-                            background: currentSize === s ? '#2563eb' : '#09090b',
-                            border: `1px solid ${currentSize === s ? '#2563eb' : '#3f3f46'}`,
-                            color: '#fff',
-                            borderRadius: '6px',
-                            fontWeight: 'bold',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {s}
-                        </button>
-                      ))}
+        {/* ================= PAGE 1: BATCH GOODS ================= */}
+        {activeTab === 'page-goods' && (
+          <div>
+            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Active Drop Items</h2>
+
+            {products.length === 0 ? (
+              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '24px', textAlign: 'center', color: '#a1a1aa', fontSize: '13px' }}>
+                No drop items available right now. Check back soon!
+              </div>
+            ) : (
+              products.map((p) => {
+                const sizesArray = p.sizes ? p.sizes.split(',').map((s) => s.trim()) : ['S', 'M', 'L', 'XL'];
+                return (
+                  <div key={p.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', overflow: 'hidden', marginBottom: '16px' }}>
+                    <img
+                      src={p.image_url || 'https://images.unsplash.com/photo-1556905055-8f358a7a47b2?w=800&q=80'}
+                      alt={p.title}
+                      style={{ width: '100%', height: '240px', objectFit: 'cover', background: '#27272a' }}
+                    />
+                    <div style={{ padding: '16px' }}>
+                      <div style={{ fontSize: '17px', fontWeight: 700, color: '#fff', marginBottom: '4px' }}>{p.title}</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>GH₵ {Number(p.price).toFixed(2)}</div>
+
+                      <span style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '6px', display: 'block', textTransform: 'uppercase', fontWeight: 700 }}>Size</span>
+                      <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                        {sizesArray.map((size) => {
+                          const isSelected = selectedSizes[p.id] === size;
+                          return (
+                            <button
+                              key={size}
+                              onClick={() => handleSizeSelect(p.id, size)}
+                              style={{
+                                flex: 1,
+                                padding: '8px 0',
+                                background: isSelected ? '#1e3a8a' : '#09090b',
+                                border: isSelected ? '1px solid #3b82f6' : '1px solid #3f3f46',
+                                color: isSelected ? '#60a5fa' : '#fff',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                textAlign: 'center',
+                              }}
+                            >
+                              {size}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        onClick={() => handleAddToCart(p)}
+                        style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}
+                      >
+                        + Add to Cart
+                      </button>
                     </div>
                   </div>
+                );
+              })
+            )}
+          </div>
+        )}
 
-                  <button
-                    onClick={() => addToCart(item)}
-                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '800', fontSize: '13px', cursor: 'pointer' }}
-                  >
-                    + Add to Cart
-                  </button>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
+        {/* ================= PAGE 2: CART ================= */}
+        {activeTab === 'page-cart' && (
+          <div>
+            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Your Preorder Cart</h2>
 
-      {/* 2. CART TAB */}
-      {activeTab === 'cart' && (
-        <div>
-          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Your Cart ({cart.length})</h2>
-
-          {cart.length === 0 ? (
-            <p style={{ color: '#71717a', fontSize: '13px' }}>Your cart is empty.</p>
-          ) : (
-            <div>
-              {cart.map((item, idx) => (
-                <div key={idx} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#18181b', border: '1px solid #27272a', padding: '10px 14px', borderRadius: '10px', marginBottom: '8px' }}>
-                  <div>
-                    <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{item.title}</div>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa' }}>
-                      Size: <b style={{ color: '#fff' }}>{item.size}</b> | GH₵ {Number(item.price).toFixed(2)}
+            {cart.length === 0 ? (
+              <p style={{ color: '#71717a', textAlign: 'center', padding: '20px' }}>Your cart is empty.</p>
+            ) : (
+              <div>
+                {cart.map((item, index) => (
+                  <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#18181b', padding: '12px', borderRadius: '10px', border: '1px solid #27272a', marginBottom: '10px' }}>
+                    <div>
+                      <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '14px' }}>{item.title}</div>
+                      <div style={{ fontSize: '12px', color: '#38bdf8' }}>GH₵ {item.price.toFixed(2)} | Size: {item.size}</div>
                     </div>
+                    <button onClick={() => handleRemoveFromCart(index)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                      Remove
+                    </button>
                   </div>
-                  <button onClick={() => removeFromCart(idx, item.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
-                    Remove
-                  </button>
-                </div>
-              ))}
-
-              {/* Deposit Plan */}
-              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px', margin: '16px 0' }}>
-                <div style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold', marginBottom: '8px' }}>PAYMENT PLAN:</div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => setDepositPlan(70)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 70 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 70 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
-                    70% Deposit
-                  </button>
-                  <button onClick={() => setDepositPlan(100)} style={{ flex: 1, padding: '10px 0', background: depositPlan === 100 ? '#2563eb' : '#09090b', border: `1px solid ${depositPlan === 100 ? '#2563eb' : '#3f3f46'}`, color: '#fff', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
-                    100% Full Payment
-                  </button>
-                </div>
-
-                <div style={{ marginTop: '14px', borderTop: '1px solid #27272a', paddingTop: '10px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '15px', fontWeight: '800', color: '#4ade80' }}>
-                    <span>Amount Due ({depositPlan}%):</span>
-                    <span>GH₵ {paymentAmount.toFixed(2)}</span>
-                  </div>
+                ))}
+                <div style={{ textAlign: 'right', fontWeight: 800, color: '#fff', fontSize: '16px', marginTop: '10px' }}>
+                  Subtotal: GH₵ {subtotal.toFixed(2)}
                 </div>
               </div>
+            )}
 
-              {/* Checkout Form */}
-              <form onSubmit={handlePaystackCheckout} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px' }}>
+            <div style={{ marginTop: '20px', background: '#18181b', padding: '16px', borderRadius: '12px', border: '1px solid #27272a' }}>
+              <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '15px', marginBottom: '10px' }}>Payment Deposit Option</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#a1a1aa', marginBottom: '8px', cursor: 'pointer' }}>
                 <input
-                  type="text"
-                  placeholder="Full Name"
-                  required
-                  value={custName}
-                  onChange={(e) => setCustName(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '8px', fontSize: '13px', boxSizing: 'border-box' }}
+                  type="radio"
+                  name="plan"
+                  value="70"
+                  checked={depositOption === '70'}
+                  onChange={(e) => setDepositOption(e.target.value)}
                 />
+                Pay 70% Deposit Now (GH₵ {(subtotal * 0.7).toFixed(2)})
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#a1a1aa', cursor: 'pointer' }}>
                 <input
-                  type="tel"
-                  placeholder="WhatsApp Phone Number (e.g., 055XXXXXXX)"
-                  required
-                  value={custPhone}
-                  onChange={(e) => setCustPhone(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', boxSizing: 'border-box' }}
+                  type="radio"
+                  name="plan"
+                  value="100"
+                  checked={depositOption === '100'}
+                  onChange={(e) => setDepositOption(e.target.value)}
                 />
+                Pay 100% Full Amount (GH₵ {subtotal.toFixed(2)})
+              </label>
 
-                <button type="submit" style={{ width: '100%', padding: '14px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '14px', cursor: 'pointer' }}>
-                  Pay GH₵ {paymentAmount.toFixed(2)} via Paystack
-                </button>
-              </form>
-            </div>
-          )}
-        </div>
-      )}
+              {/* CUSTOMER CHECKOUT INFO */}
+              <input
+                type="text"
+                placeholder="Full Name"
+                value={custName}
+                onChange={(e) => setCustName(e.target.value)}
+                style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginTop: '10px', fontSize: '14px', boxSizing: 'border-box' }}
+              />
+              <input
+                type="text"
+                placeholder="WhatsApp Phone Number"
+                value={custPhone}
+                onChange={(e) => setCustPhone(e.target.value)}
+                style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginTop: '10px', fontSize: '14px', boxSizing: 'border-box' }}
+              />
 
-      {/* 3. ORDERS TAB */}
-      {activeTab === 'orders' && (
-        <div>
-          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Your Past Orders</h2>
-
-          {!user ? (
-            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
-              <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '12px' }}>Log in on the Account tab to automatically view your order history.</p>
-              <button onClick={() => setActiveTab('account')} style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
-                Go to Login
+              <button
+                onClick={handlePaystackCheckout}
+                style={{ width: '100%', padding: '14px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '10px', fontWeight: 800, fontSize: '15px', cursor: 'pointer', marginTop: '14px' }}
+              >
+                Pay GH₵ {paymentAmount.toFixed(2)} via Paystack
               </button>
             </div>
-          ) : userOrders.length === 0 ? (
-            <p style={{ color: '#71717a', fontSize: '12px' }}>No past orders found for this account.</p>
-          ) : (
-            userOrders.map((ord) => (
-              <div key={ord.id} style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '12px', marginBottom: '10px' }}>
-                <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{ord.items}</div>
-                <div style={{ fontSize: '11px', color: '#38bdf8', marginTop: '4px' }}>
-                  Paid: GH₵ {parseFloat(ord.amount_paid).toFixed(2)} ({ord.deposit_plan})
-                </div>
-                <div style={{ fontSize: '10px', color: '#71717a', marginTop: '2px' }}>
-                  Ref: {ord.paystack_ref}
-                </div>
+          </div>
+        )}
+
+        {/* ================= PAGE 3: PAST ORDERS ================= */}
+        {activeTab === 'page-orders' && (
+          <div>
+            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>My Past Orders</h2>
+
+            {!user ? (
+              <div style={{ background: '#18181b', padding: '16px', borderRadius: '12px', border: '1px solid #27272a', textAlign: 'center', marginBottom: '16px' }}>
+                <p style={{ fontSize: '13px', color: '#a1a1aa', marginBottom: '10px' }}>Log in or create an account to auto-track all your batch preorders.</p>
+                <button
+                  onClick={() => setActiveTab('page-account')}
+                  style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+                >
+                  Log In / Register
+                </button>
               </div>
-            ))
-          )}
-        </div>
-      )}
+            ) : userOrders.length === 0 ? (
+              <div style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', color: '#a1a1aa', fontSize: '12px' }}>
+                No previous orders recorded for {user.email}.
+              </div>
+            ) : (
+              userOrders.map((ord) => (
+                <div key={ord.id} style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '14px' }}>{ord.batch_name || 'Preorder Drop'}</span>
+                    <span style={{ background: '#166534', color: '#4ade80', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                      {ord.status || 'PROCESSING'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#a1a1aa' }}>• {ord.items}</div>
+                  <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 'bold', marginTop: '4px' }}>
+                    Paid: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
-      {/* 4. ACCOUNT TAB */}
-      {activeTab === 'account' && (
-        <div>
-          <h2 style={{ fontSize: '14px', color: '#a1a1aa', textTransform: 'uppercase', marginBottom: '12px' }}>Customer Account</h2>
+        {/* ================= PAGE 4: ACCOUNT / AUTH ================= */}
+        {activeTab === 'page-account' && (
+          <div>
+            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Customer Account</h2>
 
-          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '16px' }}>
             {user ? (
-              <div>
-                <p style={{ color: '#fff', fontSize: '13px', fontWeight: 'bold', marginTop: 0 }}>Welcome back!</p>
-                <p style={{ color: '#38bdf8', fontSize: '12px', marginBottom: '16px' }}>Phone: {displayPhone}</p>
-                <button onClick={handleLogout} style={{ padding: '10px 16px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '12px', cursor: 'pointer' }}>
-                  Log Out
+              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '20px', textAlign: 'center' }}>
+                <p style={{ fontSize: '14px', color: '#fff', marginBottom: '12px' }}>Logged in as: <b>{user.email}</b></p>
+                <button
+                  onClick={handleSignOut}
+                  style={{ width: '100%', padding: '10px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                >
+                  Sign Out
                 </button>
               </div>
             ) : (
-              <form onSubmit={handlePhoneAuth}>
-                <p style={{ color: '#fff', fontSize: '14px', fontWeight: 'bold', marginTop: 0, marginBottom: '6px' }}>
-                  {isSignUp ? 'Create an Account' : 'Log In'}
-                </p>
-                <p style={{ color: '#a1a1aa', fontSize: '12px', marginBottom: '14px' }}>
-                  {isSignUp ? 'Sign up with your phone number and password.' : 'Enter your phone number and password.'}
-                </p>
+              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px', textAlign: 'center' }}>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                  <button
+                    onClick={() => setAuthMode('login')}
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      background: authMode === 'login' ? '#1e3a8a' : '#09090b',
+                      border: authMode === 'login' ? '1px solid #3b82f6' : '1px solid #3f3f46',
+                      color: authMode === 'login' ? '#60a5fa' : '#a1a1aa',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    onClick={() => setAuthMode('signup')}
+                    style={{
+                      flex: 1,
+                      padding: '8px',
+                      background: authMode === 'signup' ? '#1e3a8a' : '#09090b',
+                      border: authMode === 'signup' ? '1px solid #3b82f6' : '1px solid #3f3f46',
+                      color: authMode === 'signup' ? '#60a5fa' : '#a1a1aa',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      fontWeight: 'bold',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Create Account
+                  </button>
+                </div>
 
-                <input
-                  type="tel"
-                  placeholder="Phone Number (e.g., 055XXXXXXX)"
-                  required
-                  value={phoneInput}
-                  onChange={(e) => setPhoneInput(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
-                />
+                <form onSubmit={handleAuthSubmit}>
+                  <input
+                    type="email"
+                    placeholder="Email Address"
+                    value={authEmail}
+                    onChange={(e) => setAuthEmail(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '14px', boxSizing: 'border-box' }}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password"
+                    value={authPassword}
+                    onChange={(e) => setAuthPassword(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '14px', boxSizing: 'border-box' }}
+                  />
+                  {authMode === 'signup' && (
+                    <input
+                      type="text"
+                      placeholder="Phone Number"
+                      value={authPhoneInput}
+                      onChange={(e) => setAuthPhoneInput(e.target.value)}
+                      style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '14px', boxSizing: 'border-box' }}
+                    />
+                  )}
 
-                <input
-                  type="password"
-                  placeholder="Password"
-                  required
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '12px', fontSize: '13px', boxSizing: 'border-box' }}
-                />
-
-                <button type="submit" style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '13px', cursor: 'pointer', marginBottom: '12px' }}>
-                  {isSignUp ? 'Sign Up' : 'Log In'}
-                </button>
-
-                <p
-                  onClick={() => { setIsSignUp(!isSignUp); setAuthMsg(''); }}
-                  style={{ color: '#38bdf8', fontSize: '12px', textAlign: 'center', cursor: 'pointer', margin: 0, textDecoration: 'underline' }}
-                >
-                  {isSignUp ? 'Already have an account? Log In' : "Don't have an account? Sign Up"}
-                </p>
-
-                {authMsg && <p style={{ color: '#38bdf8', fontSize: '12px', marginTop: '12px', marginBottom: 0, textAlign: 'center', fontWeight: 'bold' }}>{authMsg}</p>}
-              </form>
+                  <button
+                    type="submit"
+                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', marginTop: '4px' }}
+                  >
+                    {authMode === 'login' ? 'Sign In' : 'Register Account'}
+                  </button>
+                </form>
+              </div>
             )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* BOTTOM NAVIGATION */}
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, height: '65px', background: '#09090b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', alignItems: 'center', maxWidth: '480px', margin: '0 auto', zIndex: 100 }}>
-        {[
-          { id: 'goods', label: 'Goods', icon: '🛍️' },
-          { id: 'cart', label: `Cart (${cart.length})`, icon: '🛒' },
-          { id: 'orders', label: 'Orders', icon: '📦' },
-          { id: 'account', label: user ? 'Account' : 'Login', icon: '👤' },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{ background: 'none', border: 'none', color: activeTab === tab.id ? '#38bdf8' : '#71717a', fontSize: '11px', fontWeight: 'bold', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', cursor: 'pointer' }}
-          >
-            <span style={{ fontSize: '18px' }}>{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
       </div>
 
+      {/* BOTTOM NAVIGATION BAR */}
+      <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#18181b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 100 }}>
+        <button
+          onClick={() => setActiveTab('page-goods')}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', color: activeTab === 'page-goods' ? '#38bdf8' : '#71717a', background: 'none', border: 'none', fontSize: '11px', fontWeight: 600, cursor: 'pointer', width: '25%' }}
+        >
+          <span style={{ fontSize: '18px', marginBottom: '2px' }}>🛍️</span>
+          <span>Batch Goods</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('page-cart')}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', color: activeTab === 'page-cart' ? '#38bdf8' : '#71717a', background: 'none', border: 'none', fontSize: '11px', fontWeight: 600, cursor: 'pointer', width: '25%' }}
+        >
+          <span style={{ fontSize: '18px', marginBottom: '2px' }}>🛒</span>
+          <span>Cart ({cart.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('page-orders')}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', color: activeTab === 'page-orders' ? '#38bdf8' : '#71717a', background: 'none', border: 'none', fontSize: '11px', fontWeight: 600, cursor: 'pointer', width: '25%' }}
+        >
+          <span style={{ fontSize: '18px', marginBottom: '2px' }}>📦</span>
+          <span>Orders</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('page-account')}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', color: activeTab === 'page-account' ? '#38bdf8' : '#71717a', background: 'none', border: 'none', fontSize: '11px', fontWeight: 600, cursor: 'pointer', width: '25%' }}
+        >
+          <span style={{ fontSize: '18px', marginBottom: '2px' }}>👤</span>
+          <span>Account</span>
+        </button>
+      </nav>
     </div>
   );
 }
