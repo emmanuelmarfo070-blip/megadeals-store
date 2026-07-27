@@ -7,410 +7,440 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 );
 
-export default function AdminPage() {
-  const [isUnlocked, setIsUnlocked] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState(false);
+export default function AdminPanel() {
+  // Passcode Security
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passcode, setPasscode] = useState('');
 
-  // Active Tab: 'tab-present' | 'tab-past'
-  const [activeTab, setActiveTab] = useState('tab-present');
+  // Admin View Tab
+  const [adminTab, setAdminTab] = useState('present'); // 'present' | 'past'
 
-  // Database States
-  const [orders, setOrders] = useState([]);
+  // Data States
+  const [activeBatch, setActiveBatch] = useState(null);
   const [products, setProducts] = useState([]);
-  const [activeBatch, setActiveBatch] = useState('August');
-  const [pastBatches, setPastBatches] = useState([]);
+  const [currentOrders, setCurrentOrders] = useState([]);
+  const [allBatches, setAllBatches] = useState([]);
+  const [pastOrders, setPastOrders] = useState([]);
+  const [selectedPastBatch, setSelectedPastBatch] = useState(null);
 
-  // Form Inputs
-  const [pName, setPName] = useState('');
-  const [pPrice, setPPrice] = useState('');
-  const [pSizes, setPSizes] = useState('');
+  // New Product Form
+  const [newTitle, setNewTitle] = useState('');
+  const [newPrice, setNewPrice] = useState('');
+  const [newSizes, setNewSizes] = useState('S, M, L, XL');
   const [imageFile, setImageFile] = useState(null);
-  const [photoPreview, setPhotoPreview] = useState('');
   const [uploading, setUploading] = useState(false);
 
+  // New Batch Form
+  const [newBatchName, setNewBatchName] = useState('');
+
   useEffect(() => {
-    if (isUnlocked) {
+    if (isAuthenticated) {
       loadAdminData();
     }
-  }, [isUnlocked]);
+  }, [isAuthenticated]);
+
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (passcode === '1234') { // Change this to your preferred admin password
+      setIsAuthenticated(true);
+    } else {
+      alert('Incorrect passcode!');
+    }
+  };
 
   const loadAdminData = async () => {
-    // 1. Fetch Orders
-    const { data: orderData } = await supabase
+    // 1. Fetch Active Batch
+    const { data: batchData } = await supabase
+      .from('batches')
+      .select('*')
+      .eq('is_active', true)
+      .single();
+
+    if (batchData) {
+      setActiveBatch(batchData);
+
+      // Fetch products for active batch
+      const { data: prodData } = await supabase
+        .from('products')
+        .select('*')
+        .order('id', { ascending: false });
+      if (prodData) setProducts(prodData);
+
+      // Fetch ACTIVE orders for current batch
+      const { data: ordData } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('batch_name', batchData.batch_name)
+        .order('created_at', { ascending: false });
+      if (ordData) setCurrentOrders(ordData);
+    } else {
+      setActiveBatch(null);
+      setProducts([]);
+      setCurrentOrders([]);
+    }
+
+    // 2. Fetch All Batches (for Past Batches tab)
+    const { data: batchList } = await supabase
+      .from('batches')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (batchList) setAllBatches(batchList);
+
+    // 3. Fetch All Orders
+    const { data: allOrd } = await supabase
       .from('orders')
       .select('*')
       .order('created_at', { ascending: false });
-    if (orderData) setOrders(orderData);
-
-    // 2. Fetch Store Products
-    const { data: prodData } = await supabase.from('products').select('*').order('id', { ascending: false });
-    if (prodData) setProducts(prodData);
-
-    // 3. Fetch Active Batch Name
-    const { data: batchData } = await supabase
-      .from('batches')
-      .select('batch_name')
-      .eq('is_active', true)
-      .single();
-    if (batchData) setActiveBatch(batchData.batch_name);
-
-    // 4. Fetch Inactive/Past Batches
-    const { data: pastBatchData } = await supabase
-      .from('batches')
-      .select('batch_name')
-      .eq('is_active', false);
-    if (pastBatchData) setPastBatches(pastBatchData.map(b => b.batch_name));
+    if (allOrd) setPastOrders(allOrd);
   };
 
-  const handleUnlock = () => {
-    // Uses your passcode
-    if (passwordInput === 'Emma$1234' || passwordInput === '1234') {
-      setIsUnlocked(true);
-      setErrorMsg(false);
-    } else {
-      setErrorMsg(true);
-    }
-  };
-
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setImageFile(file);
-      setPhotoPreview(URL.createObjectURL(file));
-    }
-  };
-
-  const handleSaveProduct = async () => {
-    if (!pName || !pPrice) return alert('Enter product name and price!');
-    if (!imageFile) return alert('Pick a product photo from your gallery!');
+  // Add Product to Current Batch
+  const handleAddProduct = async (e) => {
+    e.preventDefault();
+    if (!newTitle || !newPrice) return alert('Fill in title and price');
+    if (!activeBatch) return alert('No active batch found! Create a new batch first.');
 
     setUploading(true);
-    try {
-      // 1. Upload photo directly to Supabase Storage bucket 'products'
+    let imageUrl = '';
+
+    if (imageFile) {
       const fileExt = imageFile.name.split('.').pop();
       const fileName = `${Date.now()}.${fileExt}`;
-      const { error: uploadErr } = await supabase.storage
-        .from('products')
+      const { error: uploadError } = await supabase.storage
+        .from('product-images')
         .upload(fileName, imageFile);
 
-      if (uploadErr) throw uploadErr;
+      if (uploadError) {
+        alert('Image upload failed: ' + uploadError.message);
+        setUploading(false);
+        return;
+      }
 
-      // 2. Get Public Image URL
-      const { data: urlData } = supabase.storage
-        .from('products')
+      const { data: publicUrlData } = supabase.storage
+        .from('product-images')
         .getPublicUrl(fileName);
+      imageUrl = publicUrlData.publicUrl;
+    }
 
-      const publicUrl = urlData.publicUrl;
+    const { error } = await supabase.from('products').insert([
+      {
+        title: newTitle,
+        price: parseFloat(newPrice),
+        sizes: newSizes,
+        image_url: imageUrl,
+        batch_id: activeBatch.id,
+      },
+    ]);
 
-      // 3. Insert Product into database
-      const { error: insertErr } = await supabase.from('products').insert([
-        {
-          title: pName,
-          price: parseFloat(pPrice),
-          sizes: pSizes || 'S, M, L, XL',
-          image_url: publicUrl,
-        },
-      ]);
+    setUploading(false);
 
-      if (insertErr) throw insertErr;
-
-      alert(`Added "${pName}" to Present Batch!`);
-
-      // Reset form
-      setPName('');
-      setPPrice('');
-      setPSizes('');
+    if (error) {
+      alert('Error adding product: ' + error.message);
+    } else {
+      alert('Product added successfully!');
+      setNewTitle('');
+      setNewPrice('');
       setImageFile(null);
-      setPhotoPreview('');
       loadAdminData();
-    } catch (err) {
-      alert('Error saving product: ' + err.message);
-    } finally {
-      setUploading(false);
     }
   };
 
+  // Remove Product
   const handleRemoveProduct = async (id) => {
-    if (!confirm('Are you sure you want to remove this item?')) return;
-    const { error } = await supabase.from('products').delete().eq('id', id);
-    if (!error) loadAdminData();
+    if (!confirm('Remove this product?')) return;
+    await supabase.from('products').delete().eq('id', id);
+    loadAdminData();
   };
 
-  const handleUpdateOrderStatus = async (orderId, newStatus) => {
-    const { error } = await supabase
-      .from('orders')
-      .update({ status: newStatus })
-      .eq('id', orderId);
+  // End Active Batch
+  const handleEndBatch = async () => {
+    if (!activeBatch) return;
+    if (!confirm(`Are you sure you want to end "${activeBatch.batch_name}"? This will archive present orders.`)) return;
 
-    if (!error) {
-      alert('Order status updated!');
+    // Mark current batch inactive
+    await supabase.from('batches').update({ is_active: false }).eq('id', activeBatch.id);
+
+    alert(`Batch "${activeBatch.batch_name}" closed!`);
+    loadAdminData();
+  };
+
+  // Create New Active Batch
+  const handleCreateBatch = async (e) => {
+    e.preventDefault();
+    if (!newBatchName) return alert('Enter a batch name!');
+
+    // First deactivate any existing active batch
+    await supabase.from('batches').update({ is_active: false }).eq('is_active', true);
+
+    // Insert new active batch
+    const { error } = await supabase.from('batches').insert([
+      { batch_name: newBatchName, is_active: true }
+    ]);
+
+    if (error) {
+      alert('Error creating batch: ' + error.message);
+    } else {
+      alert(`New active drop "${newBatchName}" created!`);
+      setNewBatchName('');
       loadAdminData();
     }
   };
 
-  const handleEndAndStartNewBatch = async () => {
-    const nextBatch = prompt('Enter Name for the New Batch (e.g. September Batch):');
-    if (!nextBatch) return;
-
-    if (confirm(`End "${activeBatch}" and start "${nextBatch}"? Active store products will be cleared, but past orders remain saved.`)) {
-      // Deactivate current batch
-      await supabase.from('batches').update({ is_active: false }).neq('id', 0);
-      // Create new active batch
-      await supabase.from('batches').insert([{ batch_name: nextBatch, is_active: true }]);
-      // Clear current store items
-      await supabase.from('products').delete().neq('id', 0);
-
-      alert(`Switched to ${nextBatch}!`);
-      loadAdminData();
-    }
-  };
-
-  // 1. UNLOCKED STATE CHECK
-  if (!isUnlocked) {
+  if (!isAuthenticated) {
     return (
-      <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-        <div style={{ maxWidth: '550px', margin: '0 auto' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', textAlign: 'center' }}>
-            <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '24px', borderRadius: '16px', width: '100%', maxWidth: '360px' }}>
-              <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔐</div>
-              <h2 style={{ fontSize: '18px', color: '#fff', marginBottom: '4px' }}>Admin Access</h2>
-              <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '16px' }}>Enter secret password to access store management</p>
-
-              <input
-                type="password"
-                className="input-field"
-                placeholder="Enter Password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
-                style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '16px', letterSpacing: '2px', textAlign: 'center', boxSizing: 'border-box' }}
-              />
-              <button onClick={handleUnlock} style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>
-                Unlock Dashboard
-              </button>
-              {errorMsg && <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '8px' }}>Incorrect Password!</p>}
-            </div>
-          </div>
-        </div>
+      <div style={{ background: '#09090b', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'sans-serif' }}>
+        <form onSubmit={handleLogin} style={{ background: '#18181b', border: '1px solid #27272a', padding: '24px', borderRadius: '16px', width: '300px', textAlign: 'center' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: 800, marginBottom: '16px' }}>ADMIN ACCESS</h2>
+          <input
+            type="password"
+            placeholder="Enter Admin Passcode"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '14px', boxSizing: 'border-box', textAlign: 'center' }}
+          />
+          <button type="submit" style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer' }}>
+            Unlock Panel
+          </button>
+        </form>
       </div>
     );
   }
 
-  // Filter Present vs Past Orders
-  const presentOrders = orders.filter((o) => !o.batch_name || o.batch_name === activeBatch);
-  const pastOrders = orders.filter((o) => o.batch_name && o.batch_name !== activeBatch);
-
-  // 2. MAIN ADMIN DASHBOARD
   return (
     <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-      <div style={{ maxWidth: '550px', margin: '0 auto' }}>
-        
-        {/* HEADER BAR */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <h1 style={{ fontSize: '18px', fontWeight: 800 }}>STORE ADMIN PANEL</h1>
-          <button onClick={() => setIsUnlocked(false)} style={{ padding: '6px 12px', background: '#27272a', color: '#ef4444', border: '1px solid #3f3f46', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}>
+      <div style={{ maxWidth: '600px', margin: '0 auto' }}>
+
+        {/* HEADER */}
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+          <h1 style={{ fontSize: '18px', fontWeight: 900 }}>STORE ADMIN PANEL</h1>
+          <button onClick={() => setIsAuthenticated(false)} style={{ background: '#27272a', border: 'none', color: '#a1a1aa', padding: '6px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
             Lock Panel 🔒
           </button>
-        </div>
+        </header>
 
-        {/* TOP MODE TOGGLE */}
-        <div style={{ display: 'flex', background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '4px', marginBottom: '20px' }}>
+        {/* TAB SWITCHER */}
+        <div style={{ display: 'flex', gap: '8px', background: '#18181b', padding: '4px', borderRadius: '12px', marginBottom: '20px', border: '1px solid #27272a' }}>
           <button
-            onClick={() => setActiveTab('tab-present')}
-            style={{ flex: 1, padding: '10px 0', background: activeTab === 'tab-present' ? '#2563eb' : 'none', border: 'none', color: activeTab === 'tab-present' ? '#fff' : '#a1a1aa', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}
+            onClick={() => setAdminTab('present')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              background: adminTab === 'present' ? '#2563eb' : 'transparent',
+              color: adminTab === 'present' ? '#fff' : '#a1a1aa',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+            }}
           >
-            🟢 Present Batch ({activeBatch})
+            🟢 Present Batch ({activeBatch ? activeBatch.batch_name : 'None'})
           </button>
           <button
-            onClick={() => setActiveTab('tab-past')}
-            style={{ flex: 1, padding: '10px 0', background: activeTab === 'tab-past' ? '#2563eb' : 'none', border: 'none', color: activeTab === 'tab-past' ? '#fff' : '#a1a1aa', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}
+            onClick={() => setAdminTab('past')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              background: adminTab === 'past' ? '#2563eb' : 'transparent',
+              color: adminTab === 'past' ? '#fff' : '#a1a1aa',
+              border: 'none',
+              borderRadius: '8px',
+              fontWeight: 700,
+              fontSize: '13px',
+              cursor: 'pointer',
+            }}
           >
             📦 Past Orders & Batches
           </button>
         </div>
 
-        {/* ================= 1. PRESENT BATCH TAB ================= */}
-        {activeTab === 'tab-present' && (
+        {/* ================= TAB 1: PRESENT BATCH ================= */}
+        {adminTab === 'present' && (
           <div>
-            {/* ADD PRODUCT CARD */}
-            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  + Add New Goods to {activeBatch} Drop
-                </span>
-                <button onClick={handleEndAndStartNewBatch} style={{ padding: '4px 8px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}>
-                  End Batch
-                </button>
-              </div>
-
-              <input
-                type="text"
-                placeholder="Product Name (e.g. Graphic Hoodie)"
-                value={pName}
-                onChange={(e) => setPName(e.target.value)}
-                style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
-              />
-
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <input
-                  type="number"
-                  placeholder="Price (GH₵)"
-                  value={pPrice}
-                  onChange={(e) => setPPrice(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Sizes (S, M, L, XL)"
-                  value={pSizes}
-                  onChange={(e) => setPSizes(e.target.value)}
-                  style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
-                />
-              </div>
-
-              {/* GALLERY PHOTO PICKER */}
-              <div style={{ background: '#09090b', border: '1px dashed #3f3f46', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
-                <label style={{ fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' }}>📷 Pick Product Photo from Gallery:</label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  style={{ fontSize: '12px', color: '#a1a1aa' }}
-                />
-                {photoPreview && (
-                  <img src={photoPreview} alt="Preview" style={{ width: '50px', height: '50px', borderRadius: '6px', objectFit: 'cover', marginTop: '8px', display: 'block' }} />
-                )}
-              </div>
-
-              <button
-                onClick={handleSaveProduct}
-                disabled={uploading}
-                style={{ width: '100%', padding: '12px', background: uploading ? '#3f3f46' : '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}
-              >
-                {uploading ? 'Uploading Photo...' : `+ Save Product to ${activeBatch}`}
-              </button>
-            </div>
-
-            {/* PRESENT GOODS LIST */}
-            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-                Present Batch Goods ({products.length})
-              </div>
-
-              {products.length === 0 ? (
-                <div style={{ fontSize: '12px', color: '#a1a1aa' }}>No active items posted yet.</div>
-              ) : (
-                products.map((item) => (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '8px', marginBottom: '8px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                      <img src={item.image_url} alt={item.title} style={{ width: '42px', height: '42px', borderRadius: '6px', objectFit: 'cover' }} />
-                      <div>
-                        <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{item.title}</div>
-                        <div style={{ fontSize: '11px', color: '#38bdf8' }}>GH₵ {item.price} | Sizes: {item.sizes || 'S, M, L, XL'}</div>
-                      </div>
-                    </div>
-                    <button onClick={() => handleRemoveProduct(item.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
-                      Remove
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* PRESENT BUYERS & ORDERS */}
-            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-                Present Buyers & Orders Received ({presentOrders.length})
-              </div>
-
-              {presentOrders.length === 0 ? (
-                <div style={{ fontSize: '12px', color: '#a1a1aa' }}>No orders received for this batch yet.</div>
-              ) : (
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', marginTop: '6px' }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Phone / Item</th>
-                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Status</th>
-                      <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Paid</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {presentOrders.map((order) => (
-                      <tr key={order.id}>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #27272a' }}>
-                          <div style={{ fontWeight: 'bold', color: '#fff' }}>{order.customer_phone}</div>
-                          <div style={{ fontSize: '10px', color: '#a1a1aa' }}>{order.items}</div>
-                        </td>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #27272a' }}>
-                          <select
-                            defaultValue={order.status}
-                            onChange={(e) => handleUpdateOrderStatus(order.id, e.target.value)}
-                            style={{ background: '#09090b', color: '#4ade80', border: '1px solid #3f3f46', borderRadius: '4px', fontSize: '10px', padding: '2px' }}
-                          >
-                            <option value="Deposit Paid (70%)">70% Deposit</option>
-                            <option value="Full Payment (100%)">Full Payment</option>
-                            <option value="Ordered from China">In China</option>
-                            <option value="In Transit to Ghana">In Transit</option>
-                            <option value="Arrived - Balance Due">Arrived (Balance Due)</option>
-                            <option value="Out for Delivery">Out for Delivery</option>
-                            <option value="Delivered">Delivered</option>
-                          </select>
-                        </td>
-                        <td style={{ padding: '8px', borderBottom: '1px solid #27272a', fontWeight: 'bold', color: '#fff' }}>
-                          GH₵ {order.amount_paid}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ================= 2. PAST BATCHES & ORDERS TAB ================= */}
-        {activeTab === 'tab-past' && (
-          <div>
-            {pastBatches.length === 0 && pastOrders.length === 0 ? (
-              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', fontSize: '12px', color: '#a1a1aa' }}>
-                No past closed batches recorded yet.
+            {!activeBatch ? (
+              <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '20px', marginBottom: '20px' }}>
+                <h3 style={{ fontSize: '15px', color: '#fff', marginBottom: '10px' }}>Start New Preorder Batch</h3>
+                <form onSubmit={handleCreateBatch}>
+                  <input
+                    type="text"
+                    placeholder="Batch Name (e.g. AUGUST DROP)"
+                    value={newBatchName}
+                    onChange={(e) => setNewBatchName(e.target.value)}
+                    style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
+                  />
+                  <button type="submit" style={{ width: '100%', padding: '12px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: 800, cursor: 'pointer' }}>
+                    + Start Active Drop
+                  </button>
+                </form>
               </div>
             ) : (
               <div>
-                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
-                    Past Orders Archive ({pastOrders.length})
+                {/* ADD GOODS CARD */}
+                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8' }}>+ ADD NEW GOODS TO {activeBatch.batch_name.toUpperCase()}</span>
+                    <button onClick={handleEndBatch} style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+                      End Batch
+                    </button>
                   </div>
 
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', marginTop: '6px' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Buyer / Batch</th>
-                        <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Item</th>
-                        <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>Total Paid</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pastOrders.map((order) => (
-                        <tr key={order.id}>
-                          <td style={{ padding: '8px', borderBottom: '1px solid #27272a' }}>
-                            <div style={{ fontWeight: 'bold', color: '#fff' }}>{order.customer_phone}</div>
-                            <div style={{ fontSize: '10px', color: '#38bdf8' }}>{order.batch_name}</div>
-                          </td>
-                          <td style={{ padding: '8px', borderBottom: '1px solid #27272a', color: '#a1a1aa' }}>
-                            {order.items}
-                          </td>
-                          <td style={{ padding: '8px', borderBottom: '1px solid #27272a', color: '#4ade80', fontWeight: 'bold' }}>
-                            GH₵ {order.amount_paid}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <form onSubmit={handleAddProduct}>
+                    <input
+                      type="text"
+                      placeholder="Product Name (e.g. Graphic Hoodie)"
+                      value={newTitle}
+                      onChange={(e) => setNewTitle(e.target.value)}
+                      style={{ width: '100%', padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', boxSizing: 'border-box' }}
+                    />
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                      <input
+                        type="number"
+                        placeholder="Price (GH₵)"
+                        value={newPrice}
+                        onChange={(e) => setNewPrice(e.target.value)}
+                        style={{ flex: 1, padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', boxSizing: 'border-box' }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Sizes (S, M, L, XL)"
+                        value={newSizes}
+                        onChange={(e) => setNewSizes(e.target.value)}
+                        style={{ flex: 1, padding: '12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+
+                    <div style={{ background: '#09090b', border: '1px dashed #3f3f46', padding: '12px', borderRadius: '8px', marginBottom: '12px', textAlign: 'center' }}>
+                      <input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files[0])} style={{ color: '#a1a1aa', fontSize: '12px' }} />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={uploading}
+                      style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 800, cursor: 'pointer' }}
+                    >
+                      {uploading ? 'Uploading Product...' : `+ Save Product to ${activeBatch.batch_name}`}
+                    </button>
+                  </form>
+                </div>
+
+                {/* PRESENT GOODS LIST */}
+                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
+                    PRESENT BATCH GOODS ({products.length})
+                  </h3>
+                  {products.length === 0 ? (
+                    <p style={{ fontSize: '12px', color: '#71717a' }}>No products added to this active batch yet.</p>
+                  ) : (
+                    products.map((p) => (
+                      <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '10px', marginBottom: '8px' }}>
+                        <img src={p.image_url || 'https://via.placeholder.com/60'} alt="" style={{ width: '50px', height: '50px', borderRadius: '6px', objectFit: 'cover' }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '14px', color: '#fff' }}>{p.title}</div>
+                          <div style={{ fontSize: '12px', color: '#38bdf8' }}>GH₵ {p.price} | Sizes: {p.sizes}</div>
+                        </div>
+                        <button onClick={() => handleRemoveProduct(p.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* PRESENT BUYERS & ORDERS */}
+                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
+                    PRESENT BUYERS & ORDERS RECEIVED ({currentOrders.length})
+                  </h3>
+
+                  {currentOrders.length === 0 ? (
+                    <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this active batch yet.</p>
+                  ) : (
+                    currentOrders.map((ord) => (
+                      <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{ord.customer_name} ({ord.customer_phone})</span>
+                          <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
+                        <div style={{ fontSize: '11px', color: '#60a5fa', marginTop: '4px' }}>Status: {ord.status}</div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ================= TAB 2: PAST ORDERS & BATCHES ================= */}
+        {adminTab === 'past' && (
+          <div>
+            <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
+              BATCHES & HISTORY
+            </h3>
+
+            {/* BATCH SELECTOR CARDS */}
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '16px' }}>
+              <button
+                onClick={() => setSelectedPastBatch(null)}
+                style={{
+                  padding: '8px 14px',
+                  background: selectedPastBatch === null ? '#2563eb' : '#18181b',
+                  color: selectedPastBatch === null ? '#fff' : '#a1a1aa',
+                  border: '1px solid #27272a',
+                  borderRadius: '20px',
+                  fontSize: '12px',
+                  fontWeight: 'bold',
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                }}
+              >
+                All Orders ({pastOrders.length})
+              </button>
+              {allBatches.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => setSelectedPastBatch(b.batch_name)}
+                  style={{
+                    padding: '8px 14px',
+                    background: selectedPastBatch === b.batch_name ? '#2563eb' : '#18181b',
+                    color: selectedPastBatch === b.batch_name ? '#fff' : '#a1a1aa',
+                    border: '1px solid #27272a',
+                    borderRadius: '20px',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {b.batch_name} {!b.is_active && '(Closed)'}
+                </button>
+              ))}
+            </div>
+
+            {/* ORDERS TABLE */}
+            <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
+                <span>Buyer / Batch</span>
+                <span>Item</span>
+                <span style={{ textAlign: 'right' }}>Total Paid</span>
+              </div>
+
+              {pastOrders
+                .filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
+                .map((ord) => (
+                  <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 'bold', color: '#fff' }}>{ord.customer_name || ord.customer_phone}</div>
+                      <div style={{ fontSize: '10px', color: '#38bdf8' }}>{ord.batch_name}</div>
+                    </div>
+                    <div style={{ color: '#a1a1aa' }}>{ord.items}</div>
+                    <div style={{ textAlign: 'right', fontWeight: 'bold', color: '#4ade80' }}>
+                      GH₵ {ord.amount_paid}
+                    </div>
+                  </div>
+                ))}
+            </div>
           </div>
         )}
 
