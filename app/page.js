@@ -14,7 +14,7 @@ export default function Home() {
   const [phone, setPhone] = useState('');
   const [user, setUser] = useState(null);
   const [userOrders, setUserOrders] = useState([]);
-  const [depositPlan, setDepositPlan] = useState(70); // 70 or 100
+  const [depositPlan, setDepositPlan] = useState(70); // 70% or 100%
   const [activeBatch, setActiveBatch] = useState('Batch 1');
 
   useEffect(() => {
@@ -23,11 +23,9 @@ export default function Home() {
   }, []);
 
   const fetchProductsAndBatch = async () => {
-    // Fetch products
     const { data: prodData } = await supabase.from('products').select('*');
     if (prodData) setProducts(prodData);
 
-    // Fetch active batch name
     const { data: batchData } = await supabase
       .from('batches')
       .select('batch_name')
@@ -55,19 +53,16 @@ export default function Home() {
     if (data) setUserOrders(data);
   };
 
-  // AUTHENTICATION (Phone Proxy via Email)
   const handleAuth = async () => {
     if (!phone || phone.length < 10) return alert('Enter a valid phone number');
     const proxyEmail = `${phone.trim()}@megadeals.store`;
     const defaultPassword = `Megadeals_${phone.trim()}`;
 
-    // Try Sign In
     let { data, error } = await supabase.auth.signInWithPassword({
       email: proxyEmail,
       password: defaultPassword,
     });
 
-    // If account doesn't exist, Auto-Register
     if (error) {
       const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
         email: proxyEmail,
@@ -85,11 +80,9 @@ export default function Home() {
     }
   };
 
-  // CART CALCULATIONS
   const rawTotal = cart.reduce((sum, item) => sum + item.price, 0);
   const paymentAmount = depositPlan === 70 ? rawTotal * 0.7 : rawTotal;
 
-  // PAYSTACK DEPOSIT PAYMENT
   const handleCheckout = () => {
     if (!user) return alert('Please enter your phone number to log in first.');
     if (cart.length === 0) return alert('Cart is empty!');
@@ -97,10 +90,9 @@ export default function Home() {
     const handler = window.PaystackPop.setup({
       key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
       email: `${phone}@megadeals.store`,
-      amount: Math.round(paymentAmount * 100), // convert GH₵ to Pesewas
+      amount: Math.round(paymentAmount * 100),
       currency: 'GHS',
       callback: async (response) => {
-        // Save initial pre-order to Supabase
         const { error } = await supabase.from('orders').insert([
           {
             user_id: user.id,
@@ -126,7 +118,6 @@ export default function Home() {
     handler.openIframe();
   };
 
-  // PAYSTACK BALANCE + DELIVERY PAYMENT
   const handlePayBalance = (order, totalDue) => {
     const handler = window.PaystackPop.setup({
       key: process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY,
@@ -142,7 +133,7 @@ export default function Home() {
           })
           .eq('id', order.id);
 
-        alert('Balance & Delivery fee paid! We will dispatch your items shortly.');
+        alert('Balance & Delivery fee paid successfully!');
         fetchOrders(phone, user.id);
       },
     });
@@ -151,18 +142,16 @@ export default function Home() {
 
   return (
     <div style={{ background: '#09090b', color: '#fff', minHeight: '100vh', paddingBottom: '70px', fontFamily: 'sans-serif' }}>
-      {/* HEADER */}
       <header style={{ padding: '16px', borderBottom: '1px solid #27272a', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#18181b', position: 'sticky', top: 0, zIndex: 10 }}>
         <h1 style={{ fontSize: '18px', fontWeight: '900', margin: 0, color: '#2563eb' }}>MEGADEALS IMPORTS</h1>
         <span style={{ fontSize: '11px', background: '#2563eb22', color: '#60a5fa', padding: '4px 8px', borderRadius: '12px', fontWeight: 'bold' }}>{activeBatch}</span>
       </header>
 
-      {/* LOGIN BAR */}
       {!user && (
         <div style={{ padding: '12px 16px', background: '#18181b', borderBottom: '1px solid #27272a', display: 'flex', gap: '8px' }}>
           <input
             type="tel"
-            placeholder="Enter Phone (e.g. 0500000000)"
+            placeholder="Enter Phone Number"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             style={{ flex: 1, padding: '10px', background: '#09090b', border: '1px solid #3f3f46', borderRadius: '8px', color: '#fff' }}
@@ -173,9 +162,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* TAB CONTENT */}
       <main style={{ padding: '16px' }}>
-        {/* TAB 1: GOODS / STOREFRONT */}
         {activeTab === 'goods' && (
           <div>
             <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>🔥 Active Pre-order Items</h2>
@@ -199,7 +186,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* TAB 2: CART & CHECKOUT */}
         {activeTab === 'cart' && (
           <div>
             <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>🛒 Your Shopping Cart</h2>
@@ -215,7 +201,6 @@ export default function Home() {
                   </div>
                 ))}
 
-                {/* PAYMENT PLAN TOGGLE */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '14px', margin: '16px 0' }}>
                   <div style={{ fontSize: '12px', color: '#a1a1aa', fontWeight: 'bold', marginBottom: '8px' }}>SELECT PAYMENT PLAN:</div>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -239,9 +224,6 @@ export default function Home() {
                       </div>
                     )}
                   </div>
-                  <p style={{ fontSize: '11px', color: '#a1a1aa', marginTop: '10px', marginBottom: 0, fontStyle: 'italic' }}>
-                    📌 *Local delivery fee + remaining 30% balance will be paid in-app when items land in Ghana.*
-                  </p>
                 </div>
 
                 <button onClick={handleCheckout} style={{ width: '100%', padding: '14px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: '900', fontSize: '15px' }}>
@@ -252,11 +234,10 @@ export default function Home() {
           </div>
         )}
 
-        {/* TAB 3: ORDERS & TRACKING */}
         {activeTab === 'orders' && (
           <div>
             <h2 style={{ fontSize: '16px', marginBottom: '16px' }}>📦 Your Pre-order History</h2>
-            {!user ? <p style={{ color: '#a1a1aa' }}>Please log in to view your order tracking.</p> : userOrders.length === 0 ? <p style={{ color: '#a1a1aa' }}>No orders found.</p> : (
+            {!user ? <p style={{ color: '#a1a1aa' }}>Please log in to view your orders.</p> : userOrders.length === 0 ? <p style={{ color: '#a1a1aa' }}>No orders found.</p> : (
               userOrders.map((order) => {
                 const remaining30Percent = (order.amount_paid / 0.7) * 0.3;
                 const deliveryFee = order.delivery_fee || 0;
@@ -274,7 +255,6 @@ export default function Home() {
                     <h4 style={{ margin: '8px 0 4px', fontSize: '14px', color: '#fff' }}>{order.items}</h4>
                     <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0 }}>Deposit Paid: GH₵ {order.amount_paid}</p>
 
-                    {/* BALANCE & DELIVERY PAYMENT BUTTON */}
                     {order.status === 'Arrived - Balance Due' && !order.balance_paid && (
                       <div style={{ marginTop: '12px', borderTop: '1px dashed #3f3f46', paddingTop: '10px' }}>
                         <div style={{ fontSize: '12px', color: '#e4e4e7', marginBottom: '8px' }}>
@@ -297,7 +277,6 @@ export default function Home() {
         )}
       </main>
 
-      {/* BOTTOM NAVIGATION BAR */}
       <nav style={{ position: 'fixed', bottom: 0, width: '100%', height: '60px', background: '#18181b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
         <button onClick={() => setActiveTab('goods')} style={{ background: 'none', border: 'none', color: activeTab === 'goods' ? '#2563eb' : '#a1a1aa', fontWeight: 'bold' }}>🛍️ Goods</button>
         <button onClick={() => setActiveTab('cart')} style={{ background: 'none', border: 'none', color: activeTab === 'cart' ? '#2563eb' : '#a1a1aa', fontWeight: 'bold' }}>🛒 Cart ({cart.length})</button>
