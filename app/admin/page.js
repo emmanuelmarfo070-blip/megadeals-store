@@ -1,175 +1,329 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function AdminPage() {
-  const [orders, setOrders] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [currentBatch, setCurrentBatch] = useState('Batch 1');
-  const [newBatchName, setNewBatchName] = useState('');
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState(false);
 
-  // Product form inputs
-  const [title, setTitle] = useState('');
-  const [price, setPrice] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
+  const [adminTab, setAdminTab] = useState('present');
+  const [pName, setPName] = useState('');
+  const [pPrice, setPPrice] = useState('');
+  const [pSizes, setPSizes] = useState('S, M, L, XL');
+  const [photoBase64, setPhotoBase64] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+
+  const [products, setProducts] = useState([]);
+  const [orders, setOrders] = useState([]);
+
+  // Change this string to your secret admin password!
+  const ADMIN_SECRET_PIN = '1234';
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (isUnlocked) {
+      fetchData();
+    }
+  }, [isUnlocked]);
 
-  const loadData = async () => {
-    // Load orders
-    const { data: orderData } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
-    if (orderData) setOrders(orderData);
-
-    // Load storefront products
-    const { data: prodData } = await supabase.from('products').select('*');
+  const fetchData = async () => {
+    // Fetch Products
+    const { data: prodData } = await supabase.from('products').select('*').order('id', { ascending: false });
     if (prodData) setProducts(prodData);
 
-    // Load current active batch
-    const { data: batchData } = await supabase.from('batches').select('batch_name').eq('is_active', true).single();
-    if (batchData) setCurrentBatch(batchData.batch_name);
+    // Fetch Live Real Orders
+    const { data: orderData } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (orderData) setOrders(orderData);
   };
 
-  // ADD NEW PRODUCT TO STOREFRONT
-  const handleAddProduct = async (e) => {
+  const handleUnlock = (e) => {
     e.preventDefault();
-    if (!title || !price || !imageUrl) return alert('Fill in all fields!');
+    if (pinInput === ADMIN_SECRET_PIN) {
+      setIsUnlocked(true);
+      setPinError(false);
+    } else {
+      setPinError(true);
+    }
+  };
+
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (evt) => setPhotoBase64(evt.target.result);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSaveProduct = async (e) => {
+    e.preventDefault();
+    if (!pName || !pPrice) return alert('Enter product name and price!');
+
+    setIsSaving(true);
+    const finalImage = photoBase64 || 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800&q=80';
 
     const { error } = await supabase.from('products').insert([
-      { title, price: parseFloat(price), image_url: imageUrl }
+      {
+        title: pName,
+        price: parseFloat(pPrice),
+        image_url: finalImage,
+      },
     ]);
 
-    if (!error) {
-      alert('Product added!');
-      setTitle(''); setPrice(''); setImageUrl('');
-      loadData();
+    setIsSaving(false);
+
+    if (error) {
+      alert(`Error saving product: ${error.message}`);
     } else {
-      alert('Error: ' + error.message);
+      alert(`Added "${pName}" to Present Batch!`);
+      setPName('');
+      setPPrice('');
+      setPSizes('S, M, L, XL');
+      setPhotoBase64('');
+      fetchData();
     }
   };
 
-  // START NEW BATCH (Clears old storefront)
-  const handleStartNewBatch = async () => {
-    if (!newBatchName) return alert('Enter a name for the new batch (e.g., Batch 2)');
-
-    const confirm = window.confirm(`Are you sure you want to end ${currentBatch} and start ${newBatchName}? This clears all storefront products, but ALL past orders remain safe!`);
-    if (!confirm) return;
-
-    // 1. Deactivate old batch records
-    await supabase.from('batches').update({ is_active: false }).neq('id', 0);
-
-    // 2. Insert new active batch
-    await supabase.from('batches').insert([{ batch_name: newBatchName, is_active: true }]);
-
-    // 3. Clear products table
-    await supabase.from('products').delete().neq('id', 0);
-
-    setCurrentBatch(newBatchName);
-    setNewBatchName('');
-    loadData();
-    alert(`Batch updated to ${newBatchName}! Storefront is now clear for new products.`);
-  };
-
-  // UPDATE ORDER STATUS & DELIVERY FEE
-  const updateOrderDetails = async (orderId, status, deliveryFee) => {
-    const { error } = await supabase.from('orders').update({
-      status: status,
-      delivery_fee: parseFloat(deliveryFee || 0)
-    }).eq('id', orderId);
-
-    if (!error) {
-      alert('Order status updated!');
-      loadData();
-    } else {
-      alert('Error updating order: ' + error.message);
+  const handleDeleteProduct = async (id) => {
+    if (confirm('Delete this product from the storefront?')) {
+      await supabase.from('products').delete().eq('id', id);
+      fetchData();
     }
   };
+
+  if (!isUnlocked) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '70vh', textAlign: 'center' }}>
+        <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '24px', borderRadius: '16px', width: '100%', maxWidth: '360px', boxSizing: 'border-box' }}>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔐</div>
+          <h2 style={{ fontSize: '18px', color: '#fff', marginBottom: '4px', marginTop: 0 }}>Admin Access</h2>
+          <p style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '16px' }}>
+            Enter secret password to access store management
+          </p>
+
+          <form onSubmit={handleUnlock}>
+            <input
+              type="password"
+              placeholder="Enter Password"
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '16px', textAlign: 'center', letterSpacing: '2px', boxSizing: 'border-box' }}
+            />
+            <button
+              type="submit"
+              style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}
+            >
+              Unlock Dashboard
+            </button>
+          </form>
+
+          {pinError && <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '8px', marginBottom: 0 }}>Incorrect Password!</p>}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ padding: '20px', background: '#09090b', color: '#fff', minHeight: '100vh', fontFamily: 'sans-serif' }}>
-      <h1 style={{ fontSize: '20px', color: '#2563eb' }}>👑 Megadeals Admin Dashboard</h1>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <h1 style={{ fontSize: '18px', fontWeight: '800', margin: 0, color: '#fff' }}>STORE ADMIN PANEL</h1>
+        <button
+          onClick={() => setIsUnlocked(false)}
+          style={{ padding: '6px 12px', background: '#27272a', color: '#ef4444', border: '1px solid #3f3f46', borderRadius: '6px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
+        >
+          Lock Panel 🔒
+        </button>
+      </div>
 
-      {/* SECTION 1: BATCH MANAGEMENT */}
-      <section style={{ background: '#18181b', padding: '16px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '24px' }}>
-        <h2 style={{ fontSize: '15px', margin: '0 0 10px' }}>📦 Active Batch: <span style={{ color: '#4ade80' }}>{currentBatch}</span></h2>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <input
-            type="text"
-            placeholder="New Batch Name (e.g. Batch 2 - August Drop)"
-            value={newBatchName}
-            onChange={(e) => setNewBatchName(e.target.value)}
-            style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #3f3f46', background: '#09090b', color: '#fff' }}
-          />
-          <button onClick={handleStartNewBatch} style={{ padding: '10px 16px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
-            🚨 End Batch & Start New
-          </button>
-        </div>
-      </section>
+      <div style={{ display: 'flex', background: '#18181b', border: '1px solid #27272a', borderRadius: '12px', padding: '4px', marginBottom: '20px' }}>
+        <button
+          onClick={() => setAdminTab('present')}
+          style={{
+            flex: 1,
+            padding: '10px 0',
+            background: adminTab === 'present' ? '#2563eb' : 'none',
+            border: 'none',
+            color: adminTab === 'present' ? '#fff' : '#a1a1aa',
+            fontSize: '13px',
+            fontWeight: '700',
+            borderRadius: '8px',
+            cursor: 'pointer',
+          }}
+        >
+          🟢 Present Batch
+        </button>
+        <button
+          onClick={() => setAdminTab('past')}
+          style={{
+            flex: 1,
+            padding: '10px 0',
+            background: adminTab === 'past' ? '#2563eb' : 'none',
+            border: 'none',
+            color: adminTab === 'past' ? '#fff' : '#a1a1aa',
+            fontSize: '13px',
+            fontWeight: '700',
+            borderRadius: '8px',
+            cursor: 'pointer',
+          }}
+        >
+          📦 Past Orders & Batches
+        </button>
+      </div>
 
-      {/* SECTION 2: ADD PRODUCT TO CURRENT STOREFRONT */}
-      <section style={{ background: '#18181b', padding: '16px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '24px' }}>
-        <h2 style={{ fontSize: '15px', margin: '0 0 12px' }}>➕ Post New Item ({currentBatch})</h2>
-        <form onSubmit={handleAddProduct} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <input type="text" placeholder="Item Title (e.g. Graphic Hoodie)" value={title} onChange={(e) => setTitle(e.target.value)} style={{ padding: '10px', background: '#09090b', border: '1px solid #3f3f46', borderRadius: '6px', color: '#fff' }} />
-          <input type="number" placeholder="Price (GH₵)" value={price} onChange={(e) => setPrice(e.target.value)} style={{ padding: '10px', background: '#09090b', border: '1px solid #3f3f46', borderRadius: '6px', color: '#fff' }} />
-          <input type="url" placeholder="Image URL" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} style={{ padding: '10px', background: '#09090b', border: '1px solid #3f3f46', borderRadius: '6px', color: '#fff' }} />
-          <button type="submit" style={{ padding: '10px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>Upload Item to Store</button>
-        </form>
-      </section>
-
-      {/* SECTION 3: ORDER STATUS & DELIVERY TRACKER */}
-      <section>
-        <h2 style={{ fontSize: '15px', marginBottom: '12px' }}>🛒 Customer Orders Management</h2>
-        {orders.map((order) => (
-          <div key={order.id} style={{ background: '#18181b', padding: '14px', borderRadius: '10px', marginBottom: '12px', border: '1px solid #27272a' }}>
-            <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '4px' }}>
-              Phone: <b style={{ color: '#fff' }}>{order.customer_phone}</b> | Batch: <b>{order.batch_name}</b>
+      {adminTab === 'present' && (
+        <div>
+          {/* Add Goods Form */}
+          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
+              + Add New Goods to Drop
             </div>
-            <div style={{ fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>{order.items}</div>
-            <div style={{ fontSize: '12px', color: '#4ade80', marginBottom: '10px' }}>Deposit Paid: GH₵ {order.amount_paid}</div>
 
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <select
-                defaultValue={order.status}
-                id={`status-${order.id}`}
-                style={{ padding: '8px', background: '#09090b', color: '#fff', border: '1px solid #3f3f46', borderRadius: '6px' }}
-              >
-                <option value="Deposit Paid (70%)">Deposit Paid (70%)</option>
-                <option value="Ordered from China">Ordered from China</option>
-                <option value="In Transit to Ghana">In Transit to Ghana</option>
-                <option value="Arrived - Balance Due">Arrived - Balance Due</option>
-                <option value="Out for Delivery">Out for Delivery</option>
-                <option value="Delivered">Delivered</option>
-              </select>
-
+            <form onSubmit={handleSaveProduct}>
               <input
-                type="number"
-                placeholder="Delivery Fee (GH₵)"
-                defaultValue={order.delivery_fee}
-                id={`fee-${order.id}`}
-                style={{ width: '130px', padding: '8px', background: '#09090b', color: '#fff', border: '1px solid #3f3f46', borderRadius: '6px' }}
+                type="text"
+                placeholder="Product Name (e.g. Graphic Hoodie)"
+                value={pName}
+                onChange={(e) => setPName(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', marginBottom: '10px', fontSize: '13px', boxSizing: 'border-box' }}
               />
 
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                <input
+                  type="number"
+                  placeholder="Price (GH₵)"
+                  value={pPrice}
+                  onChange={(e) => setPPrice(e.target.value)}
+                  style={{ flex: 1, padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Sizes (S, M, L, XL)"
+                  value={pSizes}
+                  onChange={(e) => setPSizes(e.target.value)}
+                  style={{ flex: 1, padding: '10px 12px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ background: '#09090b', border: '1px dashed #3f3f46', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
+                <label style={{ fontSize: '12px', color: '#a1a1aa', display: 'block', marginBottom: '6px' }}>
+                  📷 Pick Product Photo from Gallery:
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handlePhotoUpload}
+                  style={{ fontSize: '12px', color: '#a1a1aa' }}
+                />
+                {photoBase64 && (
+                  <img
+                    src={photoBase64}
+                    alt="Preview"
+                    style={{ width: '50px', height: '50px', borderRadius: '6px', objectFit: 'cover', marginTop: '8px', display: 'block' }}
+                  />
+                )}
+              </div>
+
               <button
-                onClick={() => {
-                  const status = document.getElementById(`status-${order.id}`).value;
-                  const fee = document.getElementById(`fee-${order.id}`).value;
-                  updateOrderDetails(order.id, status, fee);
-                }}
-                style={{ padding: '8px 14px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}
+                type="submit"
+                disabled={isSaving}
+                style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: '700', fontSize: '14px', cursor: 'pointer' }}
               >
-                Save
+                {isSaving ? 'Saving...' : '+ Save Product to Present Batch'}
               </button>
-            </div>
+            </form>
           </div>
-        ))}
-      </section>
+
+          {/* Active Goods List */}
+          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
+              Active Drop Items ({products.length})
+            </div>
+
+            {products.length === 0 ? (
+              <p style={{ color: '#71717a', fontSize: '12px' }}>No items added to this drop yet.</p>
+            ) : (
+              products.map((item) => (
+                <div
+                  key={item.id}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '8px', marginBottom: '8px' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <img src={item.image_url} alt={item.title} style={{ width: '42px', height: '42px', borderRadius: '6px', objectFit: 'cover' }} />
+                    <div>
+                      <div style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{item.title}</div>
+                      <div style={{ fontSize: '11px', color: '#38bdf8' }}>GH₵ {item.price.toFixed(2)}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteProduct(item.id)}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Live Customer Orders Table */}
+          <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px' }}>
+            <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '12px', letterSpacing: '0.5px' }}>
+              Real Buyers & Incoming Orders ({orders.length})
+            </div>
+
+            {orders.length === 0 ? (
+              <p style={{ color: '#71717a', fontSize: '12px' }}>No customer orders received yet.</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid #27272a', textAlign: 'left' }}>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Customer</th>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Items & Plan</th>
+                      <th style={{ color: '#a1a1aa', padding: '8px 4px' }}>Paid</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orders.map((ord) => (
+                      <tr key={ord.id} style={{ borderBottom: '1px solid #27272a' }}>
+                        <td style={{ padding: '8px 4px', color: '#fff' }}>
+                          <div style={{ fontWeight: 'bold' }}>{ord.customer_name}</div>
+                          <div style={{ fontSize: '10px', color: '#a1a1aa' }}>{ord.customer_phone}</div>
+                        </td>
+                        <td style={{ padding: '8px 4px', color: '#a1a1aa' }}>
+                          <div>{ord.items}</div>
+                          <span style={{ color: ord.deposit_plan === '70%' ? '#4ade80' : '#60a5fa', fontSize: '10px', fontWeight: 'bold' }}>
+                            {ord.deposit_plan} Plan
+                          </span>
+                        </td>
+                        <td style={{ padding: '8px 4px', color: '#fff', fontWeight: 'bold' }}>
+                          GH₵ {parseFloat(ord.amount_paid).toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {adminTab === 'past' && (
+        <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '14px', padding: '16px' }}>
+          <div style={{ fontSize: '13px', fontWeight: '700', color: '#38bdf8', textTransform: 'uppercase', marginBottom: '8px', letterSpacing: '0.5px' }}>
+            Past Preorder Batches Archive
+          </div>
+          <p style={{ fontSize: '12px', color: '#a1a1aa', margin: 0 }}>
+            Once a drop finishes, completed orders will archive here automatically.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
