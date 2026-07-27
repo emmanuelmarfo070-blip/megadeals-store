@@ -32,14 +32,8 @@ export default function Storefront() {
   const [authPassword, setAuthPassword] = useState('');
   const [authPhoneInput, setAuthPhoneInput] = useState('');
 
-  // Load Paystack Script dynamically on mount
+  // Load saved cart & store data on mount
   useEffect(() => {
-    const script = document.createElement('script');
-    script.src = 'https://js.paystack.co/v1/inline.js';
-    script.async = true;
-    document.body.appendChild(script);
-
-    // Load saved cart from localStorage if present
     const savedCart = localStorage.getItem('megadeals_cart');
     if (savedCart) {
       try {
@@ -51,12 +45,6 @@ export default function Storefront() {
 
     loadStorefrontData();
     checkCurrentUser();
-
-    return () => {
-      if (document.body.contains(script)) {
-        document.body.removeChild(script);
-      }
-    };
   }, []);
 
   // Sync cart changes to localStorage
@@ -138,48 +126,51 @@ export default function Storefront() {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
 
-    // Direct fallback to your Paystack test key
     const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
 
     if (typeof window.PaystackPop === 'undefined') {
-      return alert('Paystack script is still loading. Please try again in a few seconds.');
+      return alert('Paystack script is still loading or blocked. Refresh and try again.');
     }
 
-    const handler = window.PaystackPop.setup({
-      key: paystackKey,
-      email: user ? user.email : `${custPhone}@megadeals.com`,
-      amount: Math.round(paymentAmount * 100), // convert GH₵ to pesewas
-      currency: 'GHS',
-      ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
-      callback: async function (response) {
-        alert('Payment successful! Reference: ' + response.reference);
+    try {
+      const handler = window.PaystackPop.setup({
+        key: paystackKey,
+        email: user ? user.email : `${custPhone}@megadeals.com`,
+        amount: Math.round(paymentAmount * 100), // convert GH₵ to pesewas
+        currency: 'GHS',
+        ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
+        callback: async function (response) {
+          alert('Payment successful! Ref: ' + response.reference);
 
-        // Record order in Supabase
-        const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
-        await supabase.from('orders').insert([
-          {
-            customer_name: custName,
-            customer_phone: custPhone,
-            customer_email: user ? user.email : '',
-            items: itemSummary,
-            amount_paid: paymentAmount,
-            deposit_percentage: depositOption,
-            batch_name: activeBatchName,
-            status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
-          },
-        ]);
+          // Record order in Supabase
+          const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
+          await supabase.from('orders').insert([
+            {
+              customer_name: custName,
+              customer_phone: custPhone,
+              customer_email: user ? user.email : '',
+              items: itemSummary,
+              amount_paid: paymentAmount,
+              deposit_percentage: depositOption,
+              batch_name: activeBatchName,
+              status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
+            },
+          ]);
 
-        setCart([]);
-        localStorage.removeItem('megadeals_cart');
-        setActiveTab('page-orders');
-        if (user) fetchUserOrders(user.email);
-      },
-      onClose: function () {
-        alert('Payment cancelled.');
-      },
-    });
+          setCart([]);
+          localStorage.removeItem('megadeals_cart');
+          setActiveTab('page-orders');
+          if (user) fetchUserOrders(user.email);
+        },
+        onClose: function () {
+          alert('Payment cancelled.');
+        },
+      });
 
-    handler.openIframe();
+      handler.openIframe();
+    } catch (err) {
+      alert('Paystack Error: ' + err.message);
+    }
   };
 
   // --- Auth Handlers ---
@@ -537,4 +528,4 @@ export default function Storefront() {
       </nav>
     </div>
   );
-    }
+}
