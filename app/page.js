@@ -17,6 +17,10 @@ export default function Storefront() {
   const [userOrders, setUserOrders] = useState([]);
   const [user, setUser] = useState(null);
 
+  // Guest Order Tracking
+  const [guestPhone, setGuestPhone] = useState('');
+  const [searchedPhone, setSearchedPhone] = useState(false);
+
   // Selection & Cart State (Loaded from localStorage)
   const [selectedSizes, setSelectedSizes] = useState({});
   const [cart, setCart] = useState([]);
@@ -96,6 +100,76 @@ export default function Storefront() {
     if (data) setUserOrders(data);
   };
 
+  // --- Fetch Guest Orders by Phone ---
+  const handleGuestPhoneSearch = async (e) => {
+    e.preventDefault();
+    if (!guestPhone.trim()) return alert('Please enter your phone number');
+
+    const cleanPhone = guestPhone.trim();
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('customer_phone', cleanPhone)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      alert('Error searching orders: ' + error.message);
+    } else {
+      setUserOrders(data || []);
+      setSearchedPhone(true);
+    }
+  };
+
+  // --- Handle Paystack Final Balance Payment ---
+  const handlePayBalance = (ord, balance30, deliveryFee, finalTotal) => {
+    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
+
+    if (typeof window.PaystackPop === 'undefined') {
+      return alert('Paystack script is loading. Please refresh and try again.');
+    }
+
+    try {
+      const handler = window.PaystackPop.setup({
+        key: paystackKey,
+        email: ord.customer_email || `${ord.customer_phone}@megadeals.com`,
+        amount: Math.round(finalTotal * 100), // convert GH₵ to pesewas
+        currency: 'GHS',
+        ref: 'BAL_' + Math.floor(Math.random() * 1000000000 + 1),
+        callback: async function (response) {
+          // Automatic Update in Supabase
+          const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
+          const { error } = await supabase
+            .from('orders')
+            .update({
+              status: 'Final Payment Received',
+              amount_paid: totalPaidNow,
+              deposit_percentage: '100',
+            })
+            .eq('id', ord.id);
+
+          if (error) {
+            alert('Payment succeeded, but failed to update order status. Contact admin.');
+          } else {
+            alert('Payment Successful! Your order status is now fully paid! ✅');
+            // Refresh order view
+            if (user) {
+              fetchUserOrders(user.email);
+            } else if (guestPhone) {
+              handleGuestPhoneSearch({ preventDefault: () => {} });
+            }
+          }
+        },
+        onClose: function () {
+          alert('Payment cancelled.');
+        },
+      });
+
+      handler.openIframe();
+    } catch (err) {
+      alert('Paystack Error: ' + err.message);
+    }
+  };
+
   // --- Size Handling ---
   const handleSizeSelect = (productId, size) => {
     setSelectedSizes((prev) => ({ ...prev, [productId]: size }));
@@ -121,7 +195,7 @@ export default function Storefront() {
   const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
   const paymentAmount = depositOption === '70' ? subtotal * 0.7 : subtotal;
 
-  // --- Paystack Payment Integration ---
+  // --- Paystack Initial Checkout Integration ---
   const handlePaystackCheckout = () => {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
@@ -136,13 +210,12 @@ export default function Storefront() {
       const handler = window.PaystackPop.setup({
         key: paystackKey,
         email: user ? user.email : `${custPhone}@megadeals.com`,
-        amount: Math.round(paymentAmount * 100), // convert GH₵ to pesewas
+        amount: Math.round(paymentAmount * 100),
         currency: 'GHS',
         ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
         callback: function (response) {
           alert('Payment successful! Ref: ' + response.reference);
 
-          // Record order in Supabase
           const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
 
           supabase
@@ -366,50 +439,66 @@ export default function Storefront() {
           </div>
         )}
 
-        {/* ================= PAGE 3: PAST ORDERS ================= */}
+        {/* ================= PAGE 3: PAST ORDERS & TRACKING ================= */}
         {activeTab === 'page-orders' && (
           <div>
-            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>My Past Orders</h2>
+            <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Track Order & Pay Balance</h2>
 
-            {!user ? (
-              <div style={{ background: '#18181b', padding: '16px', borderRadius: '12px', border: '1px solid #27272a', textAlign: 'center', marginBottom: '16px' }}>
-                <p style={{ fontSize: '13px', color: '#a1a1aa', marginBottom: '10px' }}>Log in or create an account to auto-track all your batch preorders.</p>
-                <button
-                  onClick={() => setActiveTab('page-account')}
-                  style={{ padding: '8px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
-                >
-                  Log In / Register
-                </button>
+            {/* QUICK PHONE SEARCH FOR GUESTS */}
+            {!user && (
+              <div style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 700, marginBottom: '8px' }}>
+                  🔍 Track By Phone Number
+                </div>
+                <form onSubmit={handleGuestPhoneSearch} style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Enter WhatsApp Phone Number"
+                    value={guestPhone}
+                    onChange={(e) => setGuestPhone(e.target.value)}
+                    style={{ flex: 1, padding: '10px', background: '#09090b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '8px', fontSize: '13px' }}
+                  />
+                  <button
+                    type="submit"
+                    style={{ padding: '10px 14px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+                  >
+                    Check
+                  </button>
+                </form>
               </div>
-            ) : userOrders.length === 0 ? (
-              <div style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', color: '#a1a1aa', fontSize: '12px' }}>
-                No previous orders recorded for {user.email}.
+            )}
+
+            {userOrders.length === 0 ? (
+              <div style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', color: '#a1a1aa', fontSize: '12px', textAlign: 'center' }}>
+                {searchedPhone ? 'No orders found for this phone number.' : user ? `No previous orders recorded for ${user.email}.` : 'Enter your phone number above or log in to view your orders.'}
               </div>
             ) : (
               userOrders.map((ord) => {
                 const depositPaid = Number(ord.amount_paid || 0);
-                const isDepositOnly = ord.deposit_percentage === '70' || ord.status?.includes('70%');
+                const isFullyPaid = ord.status === 'Final Payment Received' || ord.status === 'Full Payment (100%)' || ord.deposit_percentage === '100';
                 const total100 = ord.total_price ? Number(ord.total_price) : Math.round(depositPaid / 0.7);
-                const balance30 = isDepositOnly ? total100 - depositPaid : 0;
+                const balance30 = !isFullyPaid ? total100 - depositPaid : 0;
                 const deliveryFee = 30;
                 const finalTotal = balance30 + deliveryFee;
+
+                const isArrived = ord.batch_status === 'Arrived in Ghana';
 
                 return (
                   <div key={ord.id} style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                       <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '14px' }}>{ord.batch_name || 'Preorder Drop'}</span>
-                      <span style={{ background: '#166534', color: '#4ade80', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
-                        {ord.batch_status || ord.status || 'PROCESSING'}
+                      <span style={{ background: isFullyPaid ? '#166534' : '#854d0e', color: isFullyPaid ? '#4ade80' : '#fde047', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                        {ord.status || 'Deposit Paid'}
                       </span>
                     </div>
 
                     <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '4px' }}>• {ord.items}</div>
                     <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 'bold' }}>
-                      Paid: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
+                      Paid So Far: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
                     </div>
 
-                    {/* 🇬🇭 ARRIVED IN GHANA BREAKDOWN */}
-                    {ord.batch_status === 'Arrived in Ghana' && isDepositOnly ? (
+                    {/* 🇬🇭 ARRIVED IN GHANA — PAYMENT TRIGGER & MOMO BUTTON */}
+                    {isArrived && !isFullyPaid ? (
                       <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', padding: '12px', borderRadius: '10px', marginTop: '10px' }}>
                         <div style={{ fontSize: '11px', color: '#818cf8', fontWeight: 800, marginBottom: '6px' }}>
                           🇬🇭 YOUR BATCH HAS ARRIVED IN GHANA!
@@ -426,14 +515,22 @@ export default function Storefront() {
                           <span>Total Due on Delivery:</span>
                           <span>GH₵ {finalTotal}</span>
                         </div>
+
+                        {/* PAY VIA MOMO BUTTON */}
+                        <button
+                          onClick={() => handlePayBalance(ord, balance30, deliveryFee, finalTotal)}
+                          style={{ width: '100%', padding: '11px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: 800, fontSize: '13px', marginTop: '10px', cursor: 'pointer' }}
+                        >
+                          Pay GH₵ {finalTotal} Balance via MoMo / Card 💳
+                        </button>
                       </div>
-                    ) : ord.batch_status === 'Arrived in Ghana' && !isDepositOnly ? (
-                      <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', padding: '10px', borderRadius: '8px', marginTop: '10px', fontSize: '11px', color: '#4ade80', fontWeight: 'bold' }}>
-                        🇬🇭 Batch Arrived! Full payment made — GH₵ 30 delivery fee due on arrival.
+                    ) : isFullyPaid ? (
+                      <div style={{ background: '#064e3b', border: '1px solid #059669', color: '#34d399', padding: '8px', borderRadius: '8px', fontSize: '11px', textAlign: 'center', marginTop: '10px', fontWeight: 'bold' }}>
+                        ✅ Fully Paid! Ready for dispatch / delivery.
                       </div>
                     ) : (
                       <p style={{ fontSize: '11px', color: '#71717a', fontStyle: 'italic', marginTop: '8px' }}>
-                        ⏳ 70% deposit confirmed. Remaining balance + delivery fee will be calculated once your order lands in Ghana.
+                        ⏳ Batch Status: <b>{ord.batch_status || 'Processing'}</b>. Remaining balance trigger will unlock when your batch lands in Ghana.
                       </p>
                     )}
                   </div>
@@ -524,7 +621,7 @@ export default function Storefront() {
 
                   <button
                     type="submit"
-                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', marginTop: '4px' }}
+                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight 700, fontSize: '14px', cursor: 'pointer', marginTop: '4px' }}
                   >
                     {authMode === 'login' ? 'Sign In' : 'Register Account'}
                   </button>
@@ -572,4 +669,4 @@ export default function Storefront() {
       </nav>
     </div>
   );
-}
+            }
