@@ -621,7 +621,7 @@ export default function Storefront() {
 
                   <button
                     type="submit"
-                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight 700, fontSize: '14px', cursor: 'pointer', marginTop: '4px' }}
+                    style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '10px', fontWeight: 700, fontSize: '14px', cursor: 'pointer', marginTop: '4px' }}
                   >
                     {authMode === 'login' ? 'Sign In' : 'Register Account'}
                   </button>
@@ -669,4 +669,4 @@ export default function Storefront() {
       </nav>
     </div>
   );
-            }
+}
