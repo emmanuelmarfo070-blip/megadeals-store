@@ -21,6 +21,11 @@ export default function AdminPanel() {
   const [pastOrders, setPastOrders] = useState([]);
   const [selectedPastBatch, setSelectedPastBatch] = useState(null);
 
+  // SEARCH & PAGINATION STATES
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const ordersPerPage = 10;
+
   const [newTitle, setNewTitle] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newSizes, setNewSizes] = useState('S, M, L, XL');
@@ -34,6 +39,11 @@ export default function AdminPanel() {
       loadAdminData();
     }
   }, [isAuthenticated]);
+
+  // Reset page number when switching tabs or typing search query
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [adminTab, presentSubTab, selectedPastBatch, searchQuery]);
 
   const handleLogin = (e) => {
     e.preventDefault();
@@ -223,7 +233,7 @@ export default function AdminPanel() {
 
   // --- HELPER CALCULATIONS & UTILITIES ---
   
-  // 1. Live Revenue Calculations
+  // 1. Revenue Calculations
   const totalRevenue = currentOrders.reduce((sum, ord) => sum + Number(ord.amount_paid || 0), 0);
   const totalOrdersCount = currentOrders.length;
 
@@ -238,12 +248,59 @@ export default function AdminPanel() {
     return `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
   };
 
-  // 3. Auto-Tally Calculation for Supplier List
+  // 3. ENHANCED AUTO-TALLY CALCULATION FOR SUPPLIER LIST
+  // Structure: { "Tshirt": { "XL": 2, "L": 1 }, "Affordable top": { "XL": 1 } }
   const supplierTally = currentOrders.reduce((acc, ord) => {
-    const itemString = ord.items || 'Unspecified Item';
-    acc[itemString] = (acc[itemString] || 0) + 1;
+    if (!ord.items) return acc;
+
+    // Split multiple items in an order (e.g., "Affordable top (XL), Tshirt (L)")
+    const itemsArray = ord.items.split(',').map((item) => item.trim());
+
+    itemsArray.forEach((itemString) => {
+      // Regex extracts Product Name and Size from format "Product Name (Size)"
+      const match = itemString.match(/^(.*?)\s*\((.*?)\)$/);
+
+      let productName = itemString;
+      let size = 'Standard';
+
+      if (match) {
+        productName = match[1].trim();
+        size = match[2].trim().toUpperCase();
+      }
+
+      if (!acc[productName]) {
+        acc[productName] = {};
+      }
+
+      acc[productName][size] = (acc[productName][size] || 0) + 1;
+    });
+
     return acc;
   }, {});
+
+  // 4. SEARCH & PAGINATION FILTERING
+  const filterOrders = (ordersList) => {
+    return ordersList.filter((ord) => {
+      const name = (ord.customer_name || '').toLowerCase();
+      const phone = (ord.customer_phone || '').toLowerCase();
+      const items = (ord.items || '').toLowerCase();
+      const query = searchQuery.toLowerCase();
+
+      return name.includes(query) || phone.includes(query) || items.includes(query);
+    });
+  };
+
+  // Filtered lists
+  const filteredCurrentOrders = filterOrders(currentOrders);
+  const filteredPastOrders = filterOrders(
+    pastOrders.filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
+  );
+
+  // Pagination Helper
+  const getPaginatedData = (dataList) => {
+    const startIndex = (currentPage - 1) * ordersPerPage;
+    return dataList.slice(startIndex, startIndex + ordersPerPage);
+  };
 
   if (!isAuthenticated) {
     return (
@@ -275,6 +332,26 @@ export default function AdminPanel() {
             Lock Panel 🔒
           </button>
         </header>
+
+        {/* SEARCH BAR */}
+        <div style={{ marginBottom: '16px' }}>
+          <input
+            type="text"
+            placeholder="🔍 Search buyer name, phone, or item..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '12px',
+              background: '#18181b',
+              border: '1px solid #3f3f46',
+              color: '#fff',
+              borderRadius: '10px',
+              fontSize: '13px',
+              boxSizing: 'border-box'
+            }}
+          />
+        </div>
 
         <div style={{ display: 'flex', gap: '8px', background: '#18181b', padding: '4px', borderRadius: '12px', marginBottom: '20px', border: '1px solid #27272a' }}>
           <button
@@ -331,14 +408,14 @@ export default function AdminPanel() {
               </div>
             ) : (
               <div>
-                {/* 1. REVENUE DASHBOARD STATS */}
+                {/* REVENUE DASHBOARD STATS */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
                     <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>TOTAL REVENUE</div>
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {totalRevenue.toLocaleString()}</div>
                   </div>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>TOTAL ORDERS</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight 700 }}>TOTAL ORDERS</div>
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>{totalOrdersCount}</div>
                   </div>
                 </div>
@@ -448,7 +525,7 @@ export default function AdminPanel() {
                           cursor: 'pointer',
                         }}
                       >
-                        Buyers ({currentOrders.length})
+                        Buyers ({filteredCurrentOrders.length})
                       </button>
                       <button
                         onClick={() => setPresentSubTab('supplier')}
@@ -469,75 +546,109 @@ export default function AdminPanel() {
                   </div>
 
                   {presentSubTab === 'orders' ? (
-                    /* CUSTOMER ORDERS LIST WITH WHATSAPP BUTTON */
-                    currentOrders.length === 0 ? (
-                      <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this batch yet.</p>
+                    /* CUSTOMER ORDERS LIST WITH WHATSAPP BUTTON & PAGINATION */
+                    filteredCurrentOrders.length === 0 ? (
+                      <p style={{ fontSize: '12px', color: '#71717a' }}>No matching orders found.</p>
                     ) : (
-                      currentOrders.map((ord) => (
-                        <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                            <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>
-                              {ord.customer_name} ({ord.customer_phone})
-                            </span>
-                            <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
-                          </div>
-                          <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
-                          
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                              <select
-                                value={ord.status || 'Paid'}
-                                onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
-                                style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
-                              >
-                                <option value="Paid">Paid 💳</option>
-                                <option value="Delivered">Delivered ✅</option>
-                              </select>
-
-                              {/* 2. WHATSAPP DIRECT BUTTON */}
-                              <a
-                                href={getWhatsAppLink(ord.customer_phone, ord.customer_name, ord.items)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{
-                                  background: '#16a34a',
-                                  color: '#fff',
-                                  textDecoration: 'none',
-                                  padding: '4px 8px',
-                                  borderRadius: '6px',
-                                  fontSize: '11px',
-                                  fontWeight: 'bold',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}
-                              >
-                                WhatsApp 💬
-                              </a>
+                      <div>
+                        {getPaginatedData(filteredCurrentOrders).map((ord) => (
+                          <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                              <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>
+                                {ord.customer_name} ({ord.customer_phone})
+                              </span>
+                              <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
                             </div>
+                            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
+                            
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <select
+                                  value={ord.status || 'Paid'}
+                                  onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
+                                  style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
+                                >
+                                  <option value="Paid">Paid 💳</option>
+                                  <option value="Delivered">Delivered ✅</option>
+                                </select>
 
-                            <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
-                              Delete 🗑️
+                                {/* WHATSAPP DIRECT BUTTON */}
+                                <a
+                                  href={getWhatsAppLink(ord.customer_phone, ord.customer_name, ord.items)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    background: '#16a34a',
+                                    color: '#fff',
+                                    textDecoration: 'none',
+                                    padding: '4px 8px',
+                                    borderRadius: '6px',
+                                    fontSize: '11px',
+                                    fontWeight: 'bold',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}
+                                >
+                                  WhatsApp 💬
+                                </a>
+                              </div>
+
+                              <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                                Delete 🗑️
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+
+                        {/* PAGINATION CONTROLS */}
+                        {filteredCurrentOrders.length > ordersPerPage && (
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #27272a' }}>
+                            <button
+                              disabled={currentPage === 1}
+                              onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                              style={{ background: currentPage === 1 ? '#18181b' : '#2563eb', color: currentPage === 1 ? '#52525b' : '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+                            >
+                              ← Prev
+                            </button>
+                            <span style={{ fontSize: '12px', color: '#a1a1aa' }}>
+                              Page {currentPage} of {Math.ceil(filteredCurrentOrders.length / ordersPerPage)}
+                            </span>
+                            <button
+                              disabled={currentPage >= Math.ceil(filteredCurrentOrders.length / ordersPerPage)}
+                              onClick={() => setCurrentPage((prev) => prev + 1)}
+                              style={{ background: currentPage >= Math.ceil(filteredCurrentOrders.length / ordersPerPage) ? '#18181b' : '#2563eb', color: currentPage >= Math.ceil(filteredCurrentOrders.length / ordersPerPage) ? '#52525b' : '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: currentPage >= Math.ceil(filteredCurrentOrders.length / ordersPerPage) ? 'not-allowed' : 'pointer' }}
+                            >
+                              Next →
                             </button>
                           </div>
-                        </div>
-                      ))
+                        )}
+                      </div>
                     )
                   ) : (
-                    /* 3. SUPPLIER CONSOLIDATED AUTO-TALLY LIST */
+                    /* ENHANCED SUPPLIER CONSOLIDATED AUTO-TALLY LIST */
                     <div>
                       <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '10px' }}>
-                        Grouped item totals for China supplier order:
+                        Live China wholesale order quantities:
                       </div>
                       {Object.keys(supplierTally).length === 0 ? (
                         <p style={{ fontSize: '12px', color: '#71717a' }}>No items ordered yet.</p>
                       ) : (
-                        Object.entries(supplierTally).map(([itemName, count], idx) => (
-                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '8px', marginBottom: '6px' }}>
-                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>{itemName}</span>
-                            <span style={{ background: '#1e3a8a', color: '#93c5fd', border: '1px solid #1d4ed8', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' }}>
-                              Total: {count}
-                            </span>
+                        Object.entries(supplierTally).map(([productName, sizesObj], idx) => (
+                          <div key={idx} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '8px' }}>
+                            <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#38bdf8', marginBottom: '6px' }}>
+                              {productName}
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', paddingLeft: '8px' }}>
+                              {Object.entries(sizesObj).map(([size, count], sIdx) => (
+                                <div key={sIdx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                                  <span style={{ color: '#f4f4f5', fontWeight: '600' }}>• Size: {size}</span>
+                                  <span style={{ background: '#1e3a8a', color: '#93c5fd', border: '1px solid #1d4ed8', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
+                                    Qty: {count}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         ))
                       )}
@@ -606,9 +717,10 @@ export default function AdminPanel() {
                 <span style={{ textAlign: 'right' }}>Action</span>
               </div>
 
-              {pastOrders
-                .filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
-                .map((ord) => (
+              {filteredPastOrders.length === 0 ? (
+                <p style={{ fontSize: '12px', color: '#71717a', padding: '12px 0' }}>No matching orders found.</p>
+              ) : (
+                getPaginatedData(filteredPastOrders).map((ord) => (
                   <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.4fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
                     <div>
                       <div style={{ fontWeight: 'bold', color: '#fff' }}>{ord.customer_name || ord.customer_phone}</div>
@@ -636,7 +748,31 @@ export default function AdminPanel() {
                       </button>
                     </div>
                   </div>
-                ))}
+                ))
+              )}
+
+              {/* PAST ORDERS PAGINATION CONTROLS */}
+              {filteredPastOrders.length > ordersPerPage && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #27272a' }}>
+                  <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                    style={{ background: currentPage === 1 ? '#18181b' : '#2563eb', color: currentPage === 1 ? '#52525b' : '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}
+                  >
+                    ← Prev
+                  </button>
+                  <span style={{ fontSize: '12px', color: '#a1a1aa' }}>
+                    Page {currentPage} of {Math.ceil(filteredPastOrders.length / ordersPerPage)}
+                  </span>
+                  <button
+                    disabled={currentPage >= Math.ceil(filteredPastOrders.length / ordersPerPage)}
+                    onClick={() => setCurrentPage((prev) => prev + 1)}
+                    style={{ background: currentPage >= Math.ceil(filteredPastOrders.length / ordersPerPage) ? '#18181b' : '#2563eb', color: currentPage >= Math.ceil(filteredPastOrders.length / ordersPerPage) ? '#52525b' : '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 'bold', cursor: currentPage >= Math.ceil(filteredPastOrders.length / ordersPerPage) ? 'not-allowed' : 'pointer' }}
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
