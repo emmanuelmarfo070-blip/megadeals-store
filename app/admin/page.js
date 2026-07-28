@@ -1,10 +1,11 @@
 'use client';
+
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
 export default function AdminPanel() {
@@ -416,7 +417,7 @@ export default function AdminPanel() {
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>GH₵ {currentMetrics.expectedTotal100.toLocaleString()}</div>
                   </div>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight 700 }}>ACTUAL COLLECTED (70%)</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>ACTUAL COLLECTED (70%)</div>
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {currentMetrics.actualCollected.toLocaleString()}</div>
                   </div>
                 </div>
@@ -775,7 +776,6 @@ export default function AdminPanel() {
                   const deliveryFee = 30;
                   const finalArrivalAmount = balance30 + deliveryFee;
 
-                  // Check if this specific order's batch is marked "Arrived in Ghana"
                   const isThisOrderBatchArrived = pastBatchArrived || ord.batch_status === 'Arrived in Ghana';
 
                   return (
