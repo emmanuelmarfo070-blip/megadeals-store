@@ -8,35 +8,27 @@ const supabase = createClient(
 );
 
 export default function Storefront() {
-  // Navigation State
   const [activeTab, setActiveTab] = useState('page-goods');
-
-  // Database & Dynamic Data
-  const [activeBatchName, setActiveBatchName] = useState('AUGUST DROP');
+  const [activeBatchName, setActiveBatchName] = useState('SEPTEMBER');
   const [products, setProducts] = useState([]);
   const [userOrders, setUserOrders] = useState([]);
   const [user, setUser] = useState(null);
 
-  // Guest Order Tracking
   const [guestPhone, setGuestPhone] = useState('');
   const [searchedPhone, setSearchedPhone] = useState(false);
 
-  // Selection & Cart State (Loaded from localStorage)
   const [selectedSizes, setSelectedSizes] = useState({});
   const [cart, setCart] = useState([]);
-  const [depositOption, setDepositOption] = useState('70'); // '70' or '100'
+  const [depositOption, setDepositOption] = useState('70');
 
-  // Checkout Inputs
   const [custName, setCustName] = useState('');
   const [custPhone, setCustPhone] = useState('');
 
-  // Authentication State
-  const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup'
+  const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authPhoneInput, setAuthPhoneInput] = useState('');
 
-  // Load saved cart & store data on mount
   useEffect(() => {
     const savedCart = localStorage.getItem('megadeals_cart');
     if (savedCart) {
@@ -51,13 +43,11 @@ export default function Storefront() {
     checkCurrentUser();
   }, []);
 
-  // Sync cart changes to localStorage
   useEffect(() => {
     localStorage.setItem('megadeals_cart', JSON.stringify(cart));
   }, [cart]);
 
   const loadStorefrontData = async () => {
-    // 1. Fetch Active Batch
     const { data: batchData } = await supabase
       .from('batches')
       .select('batch_name')
@@ -65,7 +55,6 @@ export default function Storefront() {
       .single();
     if (batchData) setActiveBatchName(batchData.batch_name);
 
-    // 2. Fetch Store Products
     const { data: prodData } = await supabase
       .from('products')
       .select('*')
@@ -90,6 +79,28 @@ export default function Storefront() {
     }
   };
 
+  // Helper to attach latest batch status if missing from order
+  const syncBatchStatus = async (orders) => {
+    if (!orders || orders.length === 0) return [];
+    
+    // Fetch current status of active batches
+    const { data: batches } = await supabase.from('batches').select('batch_name, status');
+    const batchMap = {};
+    if (batches) {
+      batches.forEach(b => {
+        batchMap[b.batch_name.toLowerCase()] = b.status;
+      });
+    }
+
+    return orders.map(ord => {
+      const liveBatchStatus = batchMap[(ord.batch_name || '').toLowerCase()];
+      return {
+        ...ord,
+        batch_status: ord.batch_status || liveBatchStatus || 'Processing'
+      };
+    });
+  };
+
   const fetchUserOrders = async (email) => {
     const { data } = await supabase
       .from('orders')
@@ -97,12 +108,14 @@ export default function Storefront() {
       .eq('customer_email', email)
       .order('created_at', { ascending: false });
 
-    if (data) setUserOrders(data);
+    if (data) {
+      const updated = await syncBatchStatus(data);
+      setUserOrders(updated);
+    }
   };
 
-  // --- Fetch Guest Orders by Phone ---
   const handleGuestPhoneSearch = async (e) => {
-    e.preventDefault();
+    if (e && e.preventDefault) e.preventDefault();
     if (!guestPhone.trim()) return alert('Please enter your phone number');
 
     const cleanPhone = guestPhone.trim();
@@ -115,12 +128,12 @@ export default function Storefront() {
     if (error) {
       alert('Error searching orders: ' + error.message);
     } else {
-      setUserOrders(data || []);
+      const updated = await syncBatchStatus(data || []);
+      setUserOrders(updated);
       setSearchedPhone(true);
     }
   };
 
-  // --- Handle Paystack Final Balance Payment ---
   const handlePayBalance = (ord, balance30, deliveryFee, finalTotal) => {
     const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
 
@@ -132,11 +145,10 @@ export default function Storefront() {
       const handler = window.PaystackPop.setup({
         key: paystackKey,
         email: ord.customer_email || `${ord.customer_phone}@megadeals.com`,
-        amount: Math.round(finalTotal * 100), // convert GH₵ to pesewas
+        amount: Math.round(finalTotal * 100),
         currency: 'GHS',
         ref: 'BAL_' + Math.floor(Math.random() * 1000000000 + 1),
         callback: async function (response) {
-          // Automatic Update in Supabase
           const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
           const { error } = await supabase
             .from('orders')
@@ -150,8 +162,7 @@ export default function Storefront() {
           if (error) {
             alert('Payment succeeded, but failed to update order status. Contact admin.');
           } else {
-            alert('Payment Successful! Your order status is now fully paid! ✅');
-            // Refresh order view
+            alert('Payment Successful! Your order is fully paid! ✅');
             if (user) {
               fetchUserOrders(user.email);
             } else if (guestPhone) {
@@ -170,12 +181,10 @@ export default function Storefront() {
     }
   };
 
-  // --- Size Handling ---
   const handleSizeSelect = (productId, size) => {
     setSelectedSizes((prev) => ({ ...prev, [productId]: size }));
   };
 
-  // --- Cart Actions ---
   const handleAddToCart = (product) => {
     const chosenSize = selectedSizes[product.id] || 'M';
     const newItem = {
@@ -195,7 +204,6 @@ export default function Storefront() {
   const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
   const paymentAmount = depositOption === '70' ? subtotal * 0.7 : subtotal;
 
-  // --- Paystack Initial Checkout Integration ---
   const handlePaystackCheckout = () => {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
@@ -214,8 +222,6 @@ export default function Storefront() {
         currency: 'GHS',
         ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
         callback: function (response) {
-          alert('Payment successful! Ref: ' + response.reference);
-
           const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
 
           supabase
@@ -251,7 +257,6 @@ export default function Storefront() {
     }
   };
 
-  // --- Auth Handlers ---
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     if (authMode === 'signup') {
@@ -292,7 +297,6 @@ export default function Storefront() {
     <div style={{ backgroundColor: '#09090b', color: '#f4f4f5', padding: '16px', paddingBottom: '90px', minHeight: '100vh', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       <div style={{ maxWidth: '500px', margin: '0 auto' }}>
 
-        {/* HEADER */}
         <header style={{ textAlign: 'center', borderBottom: '1px solid #27272a', paddingBottom: '14px', marginBottom: '20px' }}>
           <h1 style={{ fontSize: '20px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' }}>PREORDER STORE</h1>
           <span style={{ display: 'inline-block', background: '#166534', color: '#4ade80', fontSize: '11px', padding: '4px 10px', borderRadius: '20px', marginTop: '6px', fontWeight: 700 }}>
@@ -300,7 +304,7 @@ export default function Storefront() {
           </span>
         </header>
 
-        {/* ================= PAGE 1: BATCH GOODS ================= */}
+        {/* PAGE 1: GOODS */}
         {activeTab === 'page-goods' && (
           <div>
             <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Active Drop Items</h2>
@@ -364,7 +368,7 @@ export default function Storefront() {
           </div>
         )}
 
-        {/* ================= PAGE 2: CART ================= */}
+        {/* PAGE 2: CART */}
         {activeTab === 'page-cart' && (
           <div>
             <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Your Preorder Cart</h2>
@@ -413,7 +417,6 @@ export default function Storefront() {
                 Pay 100% Full Amount (GH₵ {subtotal.toFixed(2)})
               </label>
 
-              {/* CUSTOMER CHECKOUT INFO */}
               <input
                 type="text"
                 placeholder="Full Name"
@@ -439,12 +442,11 @@ export default function Storefront() {
           </div>
         )}
 
-        {/* ================= PAGE 3: PAST ORDERS & TRACKING ================= */}
+        {/* PAGE 3: ORDERS */}
         {activeTab === 'page-orders' && (
           <div>
             <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Track Order & Pay Balance</h2>
 
-            {/* QUICK PHONE SEARCH FOR GUESTS */}
             {!user && (
               <div style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '16px' }}>
                 <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 700, marginBottom: '8px' }}>
@@ -477,11 +479,11 @@ export default function Storefront() {
                 const depositPaid = Number(ord.amount_paid || 0);
                 const isFullyPaid = ord.status === 'Final Payment Received' || ord.status === 'Full Payment (100%)' || ord.deposit_percentage === '100';
                 const total100 = ord.total_price ? Number(ord.total_price) : Math.round(depositPaid / 0.7);
-                const balance30 = !isFullyPaid ? total100 - depositPaid : 0;
+                const balance30 = !isFullyPaid ? (total100 - depositPaid) : 0;
                 const deliveryFee = 30;
                 const finalTotal = balance30 + deliveryFee;
 
-                const isArrived = ord.batch_status === 'Arrived in Ghana';
+                const isArrived = ord.batch_status === 'Arrived in Ghana' || ord.batch_status === 'Arrived in Ghana 🇬🇭';
 
                 return (
                   <div key={ord.id} style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '12px' }}>
@@ -497,7 +499,7 @@ export default function Storefront() {
                       Paid So Far: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
                     </div>
 
-                    {/* 🇬🇭 ARRIVED IN GHANA — PAYMENT TRIGGER & MOMO BUTTON */}
+                    {/* 🇬🇭 ARRIVED IN GHANA — PAYMENT TRIGGER */}
                     {isArrived && !isFullyPaid ? (
                       <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', padding: '12px', borderRadius: '10px', marginTop: '10px' }}>
                         <div style={{ fontSize: '11px', color: '#818cf8', fontWeight: 800, marginBottom: '6px' }}>
@@ -516,7 +518,6 @@ export default function Storefront() {
                           <span>GH₵ {finalTotal}</span>
                         </div>
 
-                        {/* PAY VIA MOMO BUTTON */}
                         <button
                           onClick={() => handlePayBalance(ord, balance30, deliveryFee, finalTotal)}
                           style={{ width: '100%', padding: '11px', background: '#22c55e', color: '#000', border: 'none', borderRadius: '8px', fontWeight: 800, fontSize: '13px', marginTop: '10px', cursor: 'pointer' }}
@@ -540,7 +541,7 @@ export default function Storefront() {
           </div>
         )}
 
-        {/* ================= PAGE 4: ACCOUNT / AUTH ================= */}
+        {/* PAGE 4: ACCOUNT */}
         {activeTab === 'page-account' && (
           <div>
             <h2 style={{ fontSize: '16px', color: '#fff', marginBottom: '12px' }}>Customer Account</h2>
@@ -633,7 +634,6 @@ export default function Storefront() {
 
       </div>
 
-      {/* BOTTOM NAVIGATION BAR */}
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#18181b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 100 }}>
         <button
           onClick={() => setActiveTab('page-goods')}
