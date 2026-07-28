@@ -96,16 +96,18 @@ export default function AdminPanel() {
   };
 
   // CHANGE BATCH STATUS & CASCADE TO ALL ORDERS IN THIS BATCH
-  const handleBatchStatusChange = async (batchId: number, batchName: string, newStatus: string) => {
-    // 1. Update the batches table
-    const { error: batchError } = await supabase
-      .from('batches')
-      .update({ status: newStatus })
-      .eq('id', batchId);
-
-    if (batchError) {
-      alert('Failed to update batch status: ' + batchError.message);
-      return;
+  const handleBatchStatusChange = async (batchId: number | null, batchName: string, newStatus: string) => {
+    // 1. Update the batches table if ID exists, otherwise update by batch_name
+    if (batchId) {
+      await supabase
+        .from('batches')
+        .update({ status: newStatus })
+        .eq('id', batchId);
+    } else {
+      await supabase
+        .from('batches')
+        .update({ status: newStatus })
+        .eq('batch_name', batchName);
     }
 
     // 2. Cascade updated batch status across all orders for this batch
@@ -315,9 +317,18 @@ export default function AdminPanel() {
 
   const currentBatchArrived = activeBatch?.status === 'Arrived in Ghana';
 
-  // Find object for currently selected past batch
+  // Find batch object for selected past batch, or infer status from first order
   const selectedPastBatchObj = allBatches.find((b) => b.batch_name === selectedPastBatch);
-  const pastBatchArrived = selectedPastBatchObj?.status === 'Arrived in Ghana';
+  const selectedPastBatchStatus = selectedPastBatchObj?.status || filteredPastOrders[0]?.batch_status || 'Processing';
+  const pastBatchArrived = selectedPastBatchStatus === 'Arrived in Ghana';
+
+  // Unique list of all batch names combining batches and orders
+  const uniquePastBatchNames = Array.from(
+    new Set([
+      ...allBatches.map((b) => b.batch_name),
+      ...pastOrders.map((o) => o.batch_name).filter(Boolean),
+    ])
+  );
 
   if (!isAuthenticated) {
     return (
@@ -703,42 +714,45 @@ export default function AdminPanel() {
               >
                 All Orders ({pastOrders.length})
               </button>
-              {allBatches.map((b) => (
-                <div key={b.id} style={{ display: 'flex', alignItems: 'center', background: selectedPastBatch === b.batch_name ? '#2563eb' : '#18181b', border: '1px solid #27272a', borderRadius: '20px', paddingRight: '6px' }}>
-                  <button
-                    onClick={() => setSelectedPastBatch(b.batch_name)}
-                    style={{
-                      padding: '8px 10px 8px 14px',
-                      background: 'none',
-                      color: selectedPastBatch === b.batch_name ? '#fff' : '#a1a1aa',
-                      border: 'none',
-                      fontSize: '12px',
-                      fontWeight: 'bold',
-                      whiteSpace: 'nowrap',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {b.batch_name} {!b.is_active && '(Closed)'}
-                  </button>
-                  {!b.is_active && (
-                    <button onClick={() => handleDeleteBatch(b.id, b.batch_name)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', cursor: 'pointer', padding: '0 4px' }}>
-                      ✕
+              {uniquePastBatchNames.map((bName) => {
+                const bObj = allBatches.find((b) => b.batch_name === bName);
+                return (
+                  <div key={bName} style={{ display: 'flex', alignItems: 'center', background: selectedPastBatch === bName ? '#2563eb' : '#18181b', border: '1px solid #27272a', borderRadius: '20px', paddingRight: '6px' }}>
+                    <button
+                      onClick={() => setSelectedPastBatch(bName)}
+                      style={{
+                        padding: '8px 10px 8px 14px',
+                        background: 'none',
+                        color: selectedPastBatch === bName ? '#fff' : '#a1a1aa',
+                        border: 'none',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                        whiteSpace: 'nowrap',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {bName} {bObj && !bObj.is_active ? '(Closed)' : ''}
                     </button>
-                  )}
-                </div>
-              ))}
+                    {bObj && !bObj.is_active && (
+                      <button onClick={() => handleDeleteBatch(bObj.id, bObj.batch_name)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', cursor: 'pointer', padding: '0 4px' }}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            {/* STATUS TRIGGER FOR SELECTED PAST BATCH */}
-            {selectedPastBatchObj && (
+            {/* ALWAYS-SHOW STATUS TRIGGER FOR SELECTED PAST BATCH */}
+            {selectedPastBatch && (
               <div style={{ background: '#18181b', border: '1px solid #2563eb', borderRadius: '16px', padding: '16px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 800 }}>BATCH STATUS TRIGGER</div>
-                  <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Updates status for all buyers in {selectedPastBatchObj.batch_name}</div>
+                  <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Updates status for all buyers in {selectedPastBatch}</div>
                 </div>
                 <select
-                  value={selectedPastBatchObj.status || 'Processing'}
-                  onChange={(e) => handleBatchStatusChange(selectedPastBatchObj.id, selectedPastBatchObj.batch_name, e.target.value)}
+                  value={selectedPastBatchStatus}
+                  onChange={(e) => handleBatchStatusChange(selectedPastBatchObj?.id || null, selectedPastBatch, e.target.value)}
                   style={{ background: '#09090b', color: '#38bdf8', border: '1px solid #2563eb', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
                 >
                   <option value="Processing">Processing 📦</option>
@@ -783,7 +797,7 @@ export default function AdminPanel() {
                   const deliveryFee = 30;
                   const finalArrivalAmount = balance30 + deliveryFee;
 
-                  // Check if this specific order's batch is marked "Arrived in Ghana"
+                  // Check if this order's batch is "Arrived in Ghana"
                   const isThisOrderBatchArrived = pastBatchArrived || ord.batch_status === 'Arrived in Ghana';
 
                   return (
