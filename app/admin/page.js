@@ -3,8 +3,8 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
 export default function AdminPanel() {
@@ -14,12 +14,12 @@ export default function AdminPanel() {
   const [adminTab, setAdminTab] = useState('present');
   const [presentSubTab, setPresentSubTab] = useState('orders');
 
-  const [activeBatch, setActiveBatch] = useState(null);
-  const [products, setProducts] = useState([]);
-  const [currentOrders, setCurrentOrders] = useState([]);
-  const [allBatches, setAllBatches] = useState([]);
-  const [pastOrders, setPastOrders] = useState([]);
-  const [selectedPastBatch, setSelectedPastBatch] = useState(null);
+  const [activeBatch, setActiveBatch] = useState<any>(null);
+  const [products, setProducts] = useState<any[]>([]);
+  const [currentOrders, setCurrentOrders] = useState<any[]>([]);
+  const [allBatches, setAllBatches] = useState<any[]>([]);
+  const [pastOrders, setPastOrders] = useState<any[]>([]);
+  const [selectedPastBatch, setSelectedPastBatch] = useState<string | null>(null);
 
   // SEARCH & PAGINATION
   const [searchQuery, setSearchQuery] = useState('');
@@ -29,7 +29,7 @@ export default function AdminPanel() {
   const [newTitle, setNewTitle] = useState('');
   const [newPrice, setNewPrice] = useState('');
   const [newSizes, setNewSizes] = useState('S, M, L, XL');
-  const [imageFile, setImageFile] = useState(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const [newBatchName, setNewBatchName] = useState('');
@@ -44,7 +44,7 @@ export default function AdminPanel() {
     setCurrentPage(1);
   }, [adminTab, presentSubTab, selectedPastBatch, searchQuery]);
 
-  const handleLogin = (e) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     if (passcode === 'Emma$1234') {
       setIsAuthenticated(true);
@@ -95,8 +95,9 @@ export default function AdminPanel() {
     if (allOrd) setPastOrders(allOrd);
   };
 
-  // CHANGE BATCH STATUS & CASCADE TO ORDERS
-  const handleBatchStatusChange = async (batchId, batchName, newStatus) => {
+  // CHANGE BATCH STATUS & CASCADE TO ALL ORDERS IN THIS BATCH
+  const handleBatchStatusChange = async (batchId: number, batchName: string, newStatus: string) => {
+    // 1. Update the batches table
     const { error: batchError } = await supabase
       .from('batches')
       .update({ status: newStatus })
@@ -107,16 +108,23 @@ export default function AdminPanel() {
       return;
     }
 
-    // Update status across all orders in this batch
-    await supabase
+    // 2. Cascade updated batch status across all orders for this batch
+    const { error: orderError } = await supabase
       .from('orders')
       .update({ batch_status: newStatus })
       .eq('batch_name', batchName);
 
+    if (orderError) {
+      alert('Updated batch status, but failed to update orders: ' + orderError.message);
+    } else {
+      alert(`Updated "${batchName}" status to: ${newStatus}`);
+    }
+
+    // 3. Reload state
     loadAdminData();
   };
 
-  const handleOrderStatusChange = async (orderId, newStatus) => {
+  const handleOrderStatusChange = async (orderId: number, newStatus: string) => {
     const { error } = await supabase
       .from('orders')
       .update({ status: newStatus })
@@ -129,7 +137,7 @@ export default function AdminPanel() {
     }
   };
 
-  const handleAddProduct = async (e) => {
+  const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle || !newPrice) return alert('Fill in title and price');
     if (!activeBatch) return alert('No active batch found!');
@@ -179,7 +187,7 @@ export default function AdminPanel() {
     }
   };
 
-  const handleRemoveProduct = async (id) => {
+  const handleRemoveProduct = async (id: number) => {
     if (!confirm('Remove this product?')) return;
     await supabase.from('products').delete().eq('id', id);
     loadAdminData();
@@ -194,7 +202,7 @@ export default function AdminPanel() {
     loadAdminData();
   };
 
-  const handleCreateBatch = async (e) => {
+  const handleCreateBatch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBatchName) return alert('Enter a batch name!');
 
@@ -213,7 +221,7 @@ export default function AdminPanel() {
     }
   };
 
-  const handleDeleteOrder = async (orderId) => {
+  const handleDeleteOrder = async (orderId: number) => {
     if (!confirm('Delete this order?')) return;
     const { error } = await supabase.from('orders').delete().eq('id', orderId);
     if (error) {
@@ -223,7 +231,7 @@ export default function AdminPanel() {
     }
   };
 
-  const handleDeleteBatch = async (batchId, batchName) => {
+  const handleDeleteBatch = async (batchId: number, batchName: string) => {
     if (!confirm(`Delete batch "${batchName}"?`)) return;
     const { error } = await supabase.from('batches').delete().eq('id', batchId);
     if (error) {
@@ -235,7 +243,7 @@ export default function AdminPanel() {
   };
 
   // REVENUE CALCULATIONS
-  const calculateBatchMetrics = (ordersList) => {
+  const calculateBatchMetrics = (ordersList: any[]) => {
     let actualCollected = 0;
     let expectedTotal100 = 0;
 
@@ -263,11 +271,11 @@ export default function AdminPanel() {
   const currentMetrics = calculateBatchMetrics(currentOrders);
 
   // Supplier Tally
-  const supplierTally = currentOrders.reduce((acc, ord) => {
+  const supplierTally = currentOrders.reduce((acc: Record<string, Record<string, number>>, ord) => {
     if (!ord.items) return acc;
-    const itemsArray = ord.items.split(',').map((item) => item.trim());
+    const itemsArray = ord.items.split(',').map((item: string) => item.trim());
 
-    itemsArray.forEach((itemString) => {
+    itemsArray.forEach((itemString: string) => {
       const match = itemString.match(/^(.*?)\s*\((.*?)\)$/);
       let productName = itemString;
       let size = 'Standard';
@@ -285,7 +293,7 @@ export default function AdminPanel() {
   }, {});
 
   // Search Filter
-  const filterOrders = (ordersList) => {
+  const filterOrders = (ordersList: any[]) => {
     return ordersList.filter((ord) => {
       const name = (ord.customer_name || '').toLowerCase();
       const phone = (ord.customer_phone || '').toLowerCase();
@@ -300,7 +308,7 @@ export default function AdminPanel() {
     pastOrders.filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
   );
 
-  const getPaginatedData = (dataList) => {
+  const getPaginatedData = (dataList: any[]) => {
     const startIndex = (currentPage - 1) * ordersPerPage;
     return dataList.slice(startIndex, startIndex + ordersPerPage);
   };
@@ -416,7 +424,7 @@ export default function AdminPanel() {
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>GH₵ {currentMetrics.expectedTotal100.toLocaleString()}</div>
                   </div>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight 700 }}>ACTUAL COLLECTED (70%)</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>ACTUAL COLLECTED (70%)</div>
                     <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {currentMetrics.actualCollected.toLocaleString()}</div>
                   </div>
                 </div>
@@ -474,7 +482,7 @@ export default function AdminPanel() {
                     </div>
 
                     <div style={{ background: '#09090b', border: '1px dashed #3f3f46', padding: '12px', borderRadius: '8px', marginBottom: '12px', textAlign: 'center' }}>
-                      <input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files[0])} style={{ color: '#a1a1aa', fontSize: '12px' }} />
+                      <input type="file" accept="image/*" onChange={(e) => setImageFile(e.target.files?.[0] || null)} style={{ color: '#a1a1aa', fontSize: '12px' }} />
                     </div>
 
                     <button
