@@ -12,6 +12,7 @@ export default function AdminPanel() {
   const [passcode, setPasscode] = useState('');
 
   const [adminTab, setAdminTab] = useState('present');
+  const [presentSubTab, setPresentSubTab] = useState('orders'); // 'orders' or 'supplier'
 
   const [activeBatch, setActiveBatch] = useState(null);
   const [products, setProducts] = useState([]);
@@ -220,6 +221,30 @@ export default function AdminPanel() {
     }
   };
 
+  // --- HELPER CALCULATIONS & UTILITIES ---
+  
+  // 1. Live Revenue Calculations
+  const totalRevenue = currentOrders.reduce((sum, ord) => sum + Number(ord.amount_paid || 0), 0);
+  const totalOrdersCount = currentOrders.length;
+
+  // 2. WhatsApp Link Generator
+  const getWhatsAppLink = (phone, customerName, items) => {
+    if (!phone) return '#';
+    let formattedPhone = phone.replace(/\D/g, '');
+    if (formattedPhone.startsWith('0')) {
+      formattedPhone = '233' + formattedPhone.slice(1);
+    }
+    const message = `Hello ${customerName || 'Customer'}! This is Megadeals Imports regarding your pre-order (${items || 'items'}). We are currently processing your order!`;
+    return `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
+  };
+
+  // 3. Auto-Tally Calculation for Supplier List
+  const supplierTally = currentOrders.reduce((acc, ord) => {
+    const itemString = ord.items || 'Unspecified Item';
+    acc[itemString] = (acc[itemString] || 0) + 1;
+    return acc;
+  }, {});
+
   if (!isAuthenticated) {
     return (
       <div style={{ background: '#09090b', minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontFamily: 'sans-serif' }}>
@@ -306,6 +331,18 @@ export default function AdminPanel() {
               </div>
             ) : (
               <div>
+                {/* 1. REVENUE DASHBOARD STATS */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                  <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>TOTAL REVENUE</div>
+                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {totalRevenue.toLocaleString()}</div>
+                  </div>
+                  <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>TOTAL ORDERS</div>
+                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>{totalOrdersCount}</div>
+                  </div>
+                </div>
+
                 {/* GENERAL BATCH SHIPPING STATUS */}
                 <div style={{ background: '#18181b', border: '1px solid #2563eb', borderRadius: '16px', padding: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
@@ -394,39 +431,117 @@ export default function AdminPanel() {
                   )}
                 </div>
 
-                {/* CURRENT ORDERS LIST */}
+                {/* CURRENT ORDERS & SUPPLIER TALLY TOGGLE SECTION */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
-                  <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
-                    PRESENT BUYERS & ORDERS ({currentOrders.length})
-                  </h3>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        onClick={() => setPresentSubTab('orders')}
+                        style={{
+                          background: presentSubTab === 'orders' ? '#27272a' : 'transparent',
+                          color: presentSubTab === 'orders' ? '#38bdf8' : '#71717a',
+                          border: 'none',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Buyers ({currentOrders.length})
+                      </button>
+                      <button
+                        onClick={() => setPresentSubTab('supplier')}
+                        style={{
+                          background: presentSubTab === 'supplier' ? '#27272a' : 'transparent',
+                          color: presentSubTab === 'supplier' ? '#38bdf8' : '#71717a',
+                          border: 'none',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Supplier Tally List 📋
+                      </button>
+                    </div>
+                  </div>
 
-                  {currentOrders.length === 0 ? (
-                    <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this batch yet.</p>
+                  {presentSubTab === 'orders' ? (
+                    /* CUSTOMER ORDERS LIST WITH WHATSAPP BUTTON */
+                    currentOrders.length === 0 ? (
+                      <p style={{ fontSize: '12px', color: '#71717a' }}>No orders received for this batch yet.</p>
+                    ) : (
+                      currentOrders.map((ord) => (
+                        <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>
+                              {ord.customer_name} ({ord.customer_phone})
+                            </span>
+                            <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
+                          
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                              <select
+                                value={ord.status || 'Paid'}
+                                onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
+                                style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
+                              >
+                                <option value="Paid">Paid 💳</option>
+                                <option value="Delivered">Delivered ✅</option>
+                              </select>
+
+                              {/* 2. WHATSAPP DIRECT BUTTON */}
+                              <a
+                                href={getWhatsAppLink(ord.customer_phone, ord.customer_name, ord.items)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  background: '#16a34a',
+                                  color: '#fff',
+                                  textDecoration: 'none',
+                                  padding: '4px 8px',
+                                  borderRadius: '6px',
+                                  fontSize: '11px',
+                                  fontWeight: 'bold',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}
+                              >
+                                WhatsApp 💬
+                              </a>
+                            </div>
+
+                            <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                              Delete 🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )
                   ) : (
-                    currentOrders.map((ord) => (
-                      <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                          <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>{ord.customer_name} ({ord.customer_phone})</span>
-                          <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
-                        </div>
-                        <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
-                        
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-                          <select
-                            value={ord.status || 'Paid'}
-                            onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
-                            style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
-                          >
-                            <option value="Paid">Paid 💳</option>
-                            <option value="Delivered">Delivered ✅</option>
-                          </select>
-
-                          <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
-                            Delete Order 🗑️
-                          </button>
-                        </div>
+                    /* 3. SUPPLIER CONSOLIDATED AUTO-TALLY LIST */
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '10px' }}>
+                        Grouped item totals for China supplier order:
                       </div>
-                    ))
+                      {Object.keys(supplierTally).length === 0 ? (
+                        <p style={{ fontSize: '12px', color: '#71717a' }}>No items ordered yet.</p>
+                      ) : (
+                        Object.entries(supplierTally).map(([itemName, count], idx) => (
+                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '8px', marginBottom: '6px' }}>
+                            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>{itemName}</span>
+                            <span style={{ background: '#1e3a8a', color: '#93c5fd', border: '1px solid #1d4ed8', padding: '2px 8px', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' }}>
+                              Total: {count}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
