@@ -3,8 +3,8 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 );
 
 export default function Storefront() {
@@ -29,7 +29,13 @@ export default function Storefront() {
   const [authPassword, setAuthPassword] = useState('');
   const [authPhoneInput, setAuthPhoneInput] = useState('');
 
+  // 1. Load Paystack Script Automatically & Fetch Local Cart / Session
   useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://js.paystack.co/v1/inline.js';
+    script.async = true;
+    document.body.appendChild(script);
+
     const savedCart = localStorage.getItem('megadeals_cart');
     if (savedCart) {
       try {
@@ -41,6 +47,12 @@ export default function Storefront() {
 
     loadStorefrontData();
     checkCurrentUser();
+
+    return () => {
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -79,24 +91,22 @@ export default function Storefront() {
     }
   };
 
-  // Helper to attach latest batch status if missing from order
   const syncBatchStatus = async (orders) => {
     if (!orders || orders.length === 0) return [];
-    
-    // Fetch current status of active batches
+
     const { data: batches } = await supabase.from('batches').select('batch_name, status');
     const batchMap = {};
     if (batches) {
-      batches.forEach(b => {
+      batches.forEach((b) => {
         batchMap[b.batch_name.toLowerCase()] = b.status;
       });
     }
 
-    return orders.map(ord => {
+    return orders.map((ord) => {
       const liveBatchStatus = batchMap[(ord.batch_name || '').toLowerCase()];
       return {
         ...ord,
-        batch_status: ord.batch_status || liveBatchStatus || 'Processing'
+        batch_status: ord.batch_status || liveBatchStatus || 'Processing',
       };
     });
   };
@@ -122,7 +132,7 @@ export default function Storefront() {
     const { data, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('customer_phone', cleanPhone)
+      .ilike('customer_phone', `%${cleanPhone}%`)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -134,44 +144,52 @@ export default function Storefront() {
     }
   };
 
+  // Fixed Balance Payment Trigger
   const handlePayBalance = (ord, balance30, deliveryFee, finalTotal) => {
-    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
+    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
 
-    if (typeof window.PaystackPop === 'undefined') {
-      return alert('Paystack script is loading. Please refresh and try again.');
+    if (typeof window === 'undefined' || !window.PaystackPop) {
+      return alert('Paystack script is loading. Please wait a moment and try again.');
+    }
+
+    if (!paystackKey) {
+      return alert('Paystack Public Key is missing in environment variables!');
     }
 
     try {
       const handler = window.PaystackPop.setup({
         key: paystackKey,
-        email: ord.customer_email || `${ord.customer_phone}@megadeals.com`,
+        email: ord.customer_email || `${ord.customer_phone || 'customer'}@megadeals.com`,
         amount: Math.round(finalTotal * 100),
         currency: 'GHS',
-        ref: 'BAL_' + Math.floor(Math.random() * 1000000000 + 1),
+        ref: `BAL_${ord.id}_${Date.now()}`,
         callback: async function (response) {
-          const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
-          const { error } = await supabase
-            .from('orders')
-            .update({
-              status: 'Final Payment Received',
-              amount_paid: totalPaidNow,
-              deposit_percentage: '100',
-            })
-            .eq('id', ord.id);
+          if (response.status === 'success' || response.message === 'Approved') {
+            const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
+            const { error } = await supabase
+              .from('orders')
+              .update({
+                status: 'Final Payment Received',
+                amount_paid: totalPaidNow,
+                deposit_percentage: '100',
+                payment_reference: response.reference,
+              })
+              .eq('id', ord.id);
 
-          if (error) {
-            alert('Payment succeeded, but failed to update order status. Contact admin.');
-          } else {
-            alert('Payment Successful! Your order is fully paid! ✅');
-            if (user) {
-              fetchUserOrders(user.email);
-            } else if (guestPhone) {
-              handleGuestPhoneSearch({ preventDefault: () => {} });
+            if (error) {
+              alert('Payment received, but failed to update order: ' + error.message);
+            } else {
+              alert('Payment Successful! Your order is fully paid! ✅');
+              if (user) {
+                fetchUserOrders(user.email);
+              } else if (guestPhone) {
+                handleGuestPhoneSearch();
+              }
             }
           }
         },
         onClose: function () {
-          alert('Payment cancelled.');
+          console.log('Payment popup closed');
         },
       });
 
@@ -208,10 +226,14 @@ export default function Storefront() {
     if (cart.length === 0) return alert('Your cart is empty!');
     if (!custName || !custPhone) return alert('Please enter your Name and WhatsApp Phone Number!');
 
-    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY || "pk_test_6eebff565379ac8634072ab6e860c18541e2eece";
+    const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
 
-    if (typeof window.PaystackPop === 'undefined') {
-      return alert('Paystack script is still loading or blocked. Refresh and try again.');
+    if (typeof window === 'undefined' || !window.PaystackPop) {
+      return alert('Paystack script is still loading. Please try again in a moment.');
+    }
+
+    if (!paystackKey) {
+      return alert('Paystack Public Key is missing in environment variables!');
     }
 
     try {
@@ -220,34 +242,37 @@ export default function Storefront() {
         email: user ? user.email : `${custPhone}@megadeals.com`,
         amount: Math.round(paymentAmount * 100),
         currency: 'GHS',
-        ref: 'MGD_' + Math.floor(Math.random() * 1000000000 + 1),
+        ref: `MGD_${Date.now()}`,
         callback: function (response) {
-          const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
+          if (response.status === 'success' || response.message === 'Approved') {
+            const itemSummary = cart.map((i) => `${i.title} (${i.size})`).join(', ');
 
-          supabase
-            .from('orders')
-            .insert([
-              {
-                customer_name: custName,
-                customer_phone: custPhone,
-                customer_email: user ? user.email : '',
-                items: itemSummary,
-                amount_paid: paymentAmount,
-                deposit_percentage: depositOption,
-                batch_name: activeBatchName,
-                batch_status: 'Processing',
-                status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
-              },
-            ])
-            .then(() => {
-              setCart([]);
-              localStorage.removeItem('megadeals_cart');
-              setActiveTab('page-orders');
-              if (user) fetchUserOrders(user.email);
-            });
+            supabase
+              .from('orders')
+              .insert([
+                {
+                  customer_name: custName,
+                  customer_phone: custPhone,
+                  customer_email: user ? user.email : '',
+                  items: itemSummary,
+                  amount_paid: paymentAmount,
+                  deposit_percentage: depositOption,
+                  batch_name: activeBatchName,
+                  batch_status: 'Processing',
+                  status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
+                  payment_reference: response.reference,
+                },
+              ])
+              .then(() => {
+                setCart([]);
+                localStorage.removeItem('megadeals_cart');
+                setActiveTab('page-orders');
+                if (user) fetchUserOrders(user.email);
+              });
+          }
         },
         onClose: function () {
-          alert('Payment cancelled.');
+          console.log('Payment popup closed');
         },
       });
 
@@ -298,7 +323,7 @@ export default function Storefront() {
       <div style={{ maxWidth: '500px', margin: '0 auto' }}>
 
         <header style={{ textAlign: 'center', borderBottom: '1px solid #27272a', paddingBottom: '14px', marginBottom: '20px' }}>
-          <h1 style={{ fontSize: '20px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' }}>PREORDER STORE</h1>
+          <h1 style={{ fontSize: '20px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px', margin: 0 }}>PREORDER STORE</h1>
           <span style={{ display: 'inline-block', background: '#166534', color: '#4ade80', fontSize: '11px', padding: '4px 10px', borderRadius: '20px', marginTop: '6px', fontWeight: 700 }}>
             🟢 {activeBatchName.toUpperCase()} DROP LIVE
           </span>
@@ -634,6 +659,7 @@ export default function Storefront() {
 
       </div>
 
+      {/* BOTTOM NAVIGATION BAR */}
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, background: '#18181b', borderTop: '1px solid #27272a', display: 'flex', justifyContent: 'space-around', padding: '10px 0', zIndex: 100 }}>
         <button
           onClick={() => setActiveTab('page-goods')}
