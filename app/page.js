@@ -156,6 +156,7 @@ export default function Storefront() {
                 amount_paid: paymentAmount,
                 deposit_percentage: depositOption,
                 batch_name: activeBatchName,
+                batch_status: 'Processing',
                 status: depositOption === '70' ? 'Deposit Paid (70%)' : 'Full Payment (100%)',
               },
             ])
@@ -385,20 +386,59 @@ export default function Storefront() {
                 No previous orders recorded for {user.email}.
               </div>
             ) : (
-              userOrders.map((ord) => (
-                <div key={ord.id} style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '14px' }}>{ord.batch_name || 'Preorder Drop'}</span>
-                    <span style={{ background: '#166534', color: '#4ade80', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
-                      {ord.status || 'PROCESSING'}
-                    </span>
+              userOrders.map((ord) => {
+                const depositPaid = Number(ord.amount_paid || 0);
+                const isDepositOnly = ord.deposit_percentage === '70' || ord.status?.includes('70%');
+                const total100 = ord.total_price ? Number(ord.total_price) : Math.round(depositPaid / 0.7);
+                const balance30 = isDepositOnly ? total100 - depositPaid : 0;
+                const deliveryFee = 30;
+                const finalTotal = balance30 + deliveryFee;
+
+                return (
+                  <div key={ord.id} style={{ background: '#18181b', padding: '14px', borderRadius: '12px', border: '1px solid #27272a', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '14px' }}>{ord.batch_name || 'Preorder Drop'}</span>
+                      <span style={{ background: '#166534', color: '#4ade80', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold' }}>
+                        {ord.batch_status || ord.status || 'PROCESSING'}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '4px' }}>• {ord.items}</div>
+                    <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 'bold' }}>
+                      Paid: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
+                    </div>
+
+                    {/* 🇬🇭 ARRIVED IN GHANA BREAKDOWN */}
+                    {ord.batch_status === 'Arrived in Ghana' && isDepositOnly ? (
+                      <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', padding: '12px', borderRadius: '10px', marginTop: '10px' }}>
+                        <div style={{ fontSize: '11px', color: '#818cf8', fontWeight: 800, marginBottom: '6px' }}>
+                          🇬🇭 YOUR BATCH HAS ARRIVED IN GHANA!
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#c7d2fe', display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span>30% Balance Due:</span>
+                          <b>GH₵ {balance30}</b>
+                        </div>
+                        <div style={{ fontSize: '12px', color: '#c7d2fe', display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                          <span>Local Delivery Fee:</span>
+                          <b>GH₵ {deliveryFee}</b>
+                        </div>
+                        <div style={{ fontSize: '13px', color: '#4ade80', fontWeight: 900, display: 'flex', justifyContent: 'space-between', marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed #4338ca' }}>
+                          <span>Total Due on Delivery:</span>
+                          <span>GH₵ {finalTotal}</span>
+                        </div>
+                      </div>
+                    ) : ord.batch_status === 'Arrived in Ghana' && !isDepositOnly ? (
+                      <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', padding: '10px', borderRadius: '8px', marginTop: '10px', fontSize: '11px', color: '#4ade80', fontWeight: 'bold' }}>
+                        🇬🇭 Batch Arrived! Full payment made — GH₵ 30 delivery fee due on arrival.
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: '11px', color: '#71717a', fontStyle: 'italic', marginTop: '8px' }}>
+                        ⏳ 70% deposit confirmed. Remaining balance + delivery fee will be calculated once your order lands in Ghana.
+                      </p>
+                    )}
                   </div>
-                  <div style={{ fontSize: '12px', color: '#a1a1aa' }}>• {ord.items}</div>
-                  <div style={{ fontSize: '12px', color: '#38bdf8', fontWeight: 'bold', marginTop: '4px' }}>
-                    Paid: GH₵ {ord.amount_paid} ({ord.deposit_percentage || 70}%)
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}
