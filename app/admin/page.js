@@ -21,7 +21,7 @@ export default function AdminPanel() {
   const [pastOrders, setPastOrders] = useState([]);
   const [selectedPastBatch, setSelectedPastBatch] = useState(null);
 
-  // SEARCH & PAGINATION STATES
+  // SEARCH & PAGINATION
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const ordersPerPage = 10;
@@ -40,7 +40,6 @@ export default function AdminPanel() {
     }
   }, [isAuthenticated]);
 
-  // Reset page number when switching tabs or typing search query
   useEffect(() => {
     setCurrentPage(1);
   }, [adminTab, presentSubTab, selectedPastBatch, searchQuery]);
@@ -96,17 +95,27 @@ export default function AdminPanel() {
     if (allOrd) setPastOrders(allOrd);
   };
 
+  // 1. GENERAL BATCH STATUS TRIGGER (CASCADE TO ALL BUYERS)
   const handleBatchStatusChange = async (batchId, newStatus) => {
-    const { error } = await supabase
+    const { error: batchError } = await supabase
       .from('batches')
       .update({ status: newStatus })
       .eq('id', batchId);
 
-    if (error) {
-      alert('Failed to update batch status: ' + error.message);
-    } else {
-      loadAdminData();
+    if (batchError) {
+      alert('Failed to update batch status: ' + batchError.message);
+      return;
     }
+
+    // Cascade status update to all orders under this batch name
+    if (activeBatch) {
+      await supabase
+        .from('orders')
+        .update({ batch_status: newStatus })
+        .eq('batch_name', activeBatch.batch_name);
+    }
+
+    loadAdminData();
   };
 
   const handleOrderStatusChange = async (orderId, newStatus) => {
@@ -125,7 +134,7 @@ export default function AdminPanel() {
   const handleAddProduct = async (e) => {
     e.preventDefault();
     if (!newTitle || !newPrice) return alert('Fill in title and price');
-    if (!activeBatch) return alert('No active batch found! Create a new batch first.');
+    if (!activeBatch) return alert('No active batch found!');
 
     setUploading(true);
     let imageUrl = '';
@@ -183,7 +192,7 @@ export default function AdminPanel() {
     if (!confirm(`Are you sure you want to end "${activeBatch.batch_name}"?`)) return;
 
     await supabase.from('batches').update({ is_active: false }).eq('id', activeBatch.id);
-    alert(`Batch "${activeBatch.batch_name}" closed!`);
+    alert(`Batch "${activeBatch.batch_name}" ended! Stats saved to history.`);
     loadAdminData();
   };
 
@@ -200,7 +209,7 @@ export default function AdminPanel() {
     if (error) {
       alert('Error creating batch: ' + error.message);
     } else {
-      alert(`New active drop "${newBatchName}" created!`);
+      alert(`New drop "${newBatchName}" created!`);
       setNewBatchName('');
       loadAdminData();
     }
@@ -208,58 +217,61 @@ export default function AdminPanel() {
 
   const handleDeleteOrder = async (orderId) => {
     if (!confirm('Delete this order?')) return;
-
     const { error } = await supabase.from('orders').delete().eq('id', orderId);
     if (error) {
       alert('Error deleting order: ' + error.message);
     } else {
-      alert('Order deleted!');
       loadAdminData();
     }
   };
 
   const handleDeleteBatch = async (batchId, batchName) => {
     if (!confirm(`Delete batch "${batchName}"?`)) return;
-
     const { error } = await supabase.from('batches').delete().eq('id', batchId);
     if (error) {
       alert('Error deleting batch: ' + error.message);
     } else {
-      alert('Batch deleted!');
       if (selectedPastBatch === batchName) setSelectedPastBatch(null);
       loadAdminData();
     }
   };
 
-  // --- HELPER CALCULATIONS & UTILITIES ---
-  
-  // 1. Revenue Calculations
-  const totalRevenue = currentOrders.reduce((sum, ord) => sum + Number(ord.amount_paid || 0), 0);
-  const totalOrdersCount = currentOrders.length;
+  // --- REVENUE & FINANCIAL LOGIC ---
+  const calculateBatchMetrics = (ordersList) => {
+    let actualCollected = 0;
+    let expectedTotal100 = 0;
 
-  // 2. WhatsApp Link Generator
-  const getWhatsAppLink = (phone, customerName, items) => {
-    if (!phone) return '#';
-    let formattedPhone = phone.replace(/\D/g, '');
-    if (formattedPhone.startsWith('0')) {
-      formattedPhone = '233' + formattedPhone.slice(1);
-    }
-    const message = `Hello ${customerName || 'Customer'}! This is Megadeals Imports regarding your pre-order (${items || 'items'}). We are currently processing your order!`;
-    return `https://wa.me/${formattedPhone}?text=${encodeURIComponent(message)}`;
+    ordersList.forEach((ord) => {
+      const depositPaid = Number(ord.amount_paid || 0);
+      actualCollected += depositPaid;
+
+      // Calculate total 100% price: if deposit paid is 70%, total is (deposit / 0.7)
+      if (ord.total_price) {
+        expectedTotal100 += Number(ord.total_price);
+      } else if (depositPaid > 0) {
+        expectedTotal100 += Math.round(depositPaid / 0.7);
+      }
+    });
+
+    const pendingBalance = expectedTotal100 - actualCollected;
+
+    return {
+      actualCollected,
+      expectedTotal100,
+      pendingBalance,
+      totalOrders: ordersList.length,
+    };
   };
 
-  // 3. ENHANCED AUTO-TALLY CALCULATION FOR SUPPLIER LIST
-  // Structure: { "Tshirt": { "XL": 2, "L": 1 }, "Affordable top": { "XL": 1 } }
+  const currentMetrics = calculateBatchMetrics(currentOrders);
+
+  // Supplier Auto-Tally
   const supplierTally = currentOrders.reduce((acc, ord) => {
     if (!ord.items) return acc;
-
-    // Split multiple items in an order (e.g., "Affordable top (XL), Tshirt (L)")
     const itemsArray = ord.items.split(',').map((item) => item.trim());
 
     itemsArray.forEach((itemString) => {
-      // Regex extracts Product Name and Size from format "Product Name (Size)"
       const match = itemString.match(/^(.*?)\s*\((.*?)\)$/);
-
       let productName = itemString;
       let size = 'Standard';
 
@@ -268,39 +280,35 @@ export default function AdminPanel() {
         size = match[2].trim().toUpperCase();
       }
 
-      if (!acc[productName]) {
-        acc[productName] = {};
-      }
-
+      if (!acc[productName]) acc[productName] = {};
       acc[productName][size] = (acc[productName][size] || 0) + 1;
     });
 
     return acc;
   }, {});
 
-  // 4. SEARCH & PAGINATION FILTERING
+  // Search Filter
   const filterOrders = (ordersList) => {
     return ordersList.filter((ord) => {
       const name = (ord.customer_name || '').toLowerCase();
       const phone = (ord.customer_phone || '').toLowerCase();
       const items = (ord.items || '').toLowerCase();
       const query = searchQuery.toLowerCase();
-
       return name.includes(query) || phone.includes(query) || items.includes(query);
     });
   };
 
-  // Filtered lists
   const filteredCurrentOrders = filterOrders(currentOrders);
   const filteredPastOrders = filterOrders(
     pastOrders.filter((o) => (selectedPastBatch ? o.batch_name === selectedPastBatch : true))
   );
 
-  // Pagination Helper
   const getPaginatedData = (dataList) => {
     const startIndex = (currentPage - 1) * ordersPerPage;
     return dataList.slice(startIndex, startIndex + ordersPerPage);
   };
+
+  const isArrivedInGhana = activeBatch?.status === 'Arrived in Ghana';
 
   if (!isAuthenticated) {
     return (
@@ -340,19 +348,11 @@ export default function AdminPanel() {
             placeholder="🔍 Search buyer name, phone, or item..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              width: '100%',
-              padding: '12px',
-              background: '#18181b',
-              border: '1px solid #3f3f46',
-              color: '#fff',
-              borderRadius: '10px',
-              fontSize: '13px',
-              boxSizing: 'border-box'
-            }}
+            style={{ width: '100%', padding: '12px', background: '#18181b', border: '1px solid #3f3f46', color: '#fff', borderRadius: '10px', fontSize: '13px', boxSizing: 'border-box' }}
           />
         </div>
 
+        {/* MAIN NAVIGATION TABS */}
         <div style={{ display: 'flex', gap: '8px', background: '#18181b', padding: '4px', borderRadius: '12px', marginBottom: '20px', border: '1px solid #27272a' }}>
           <button
             onClick={() => setAdminTab('present')}
@@ -384,7 +384,7 @@ export default function AdminPanel() {
               cursor: 'pointer',
             }}
           >
-            📦 Past Orders & Batches
+            📦 History & Revenue
           </button>
         </div>
 
@@ -408,23 +408,23 @@ export default function AdminPanel() {
               </div>
             ) : (
               <div>
-                {/* REVENUE DASHBOARD STATS */}
+                {/* 100% REVENUE VS ACTUAL PAID STATS */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>TOTAL REVENUE</div>
-                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {totalRevenue.toLocaleString()}</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight: 700 }}>EXPECTED TOTAL (100%)</div>
+                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>GH₵ {currentMetrics.expectedTotal100.toLocaleString()}</div>
                   </div>
                   <div style={{ background: '#18181b', border: '1px solid #27272a', padding: '12px', borderRadius: '12px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight 700 }}>TOTAL ORDERS</div>
-                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#38bdf8', marginTop: '2px' }}>{totalOrdersCount}</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa', fontWeight 700 }}>ACTUAL COLLECTED (70%)</div>
+                    <div style={{ fontSize: '18px', fontWeight: 900, color: '#4ade80', marginTop: '2px' }}>GH₵ {currentMetrics.actualCollected.toLocaleString()}</div>
                   </div>
                 </div>
 
-                {/* GENERAL BATCH SHIPPING STATUS */}
+                {/* GENERAL BATCH STATUS TRIGGER */}
                 <div style={{ background: '#18181b', border: '1px solid #2563eb', borderRadius: '16px', padding: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 800 }}>GENERAL BATCH SHIPPING STATUS</div>
-                    <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Applies to all orders in {activeBatch.batch_name}</div>
+                    <div style={{ fontSize: '12px', color: '#93c5fd', fontWeight: 800 }}>GENERAL BATCH STATUS TRIGGER</div>
+                    <div style={{ fontSize: '11px', color: '#a1a1aa' }}>Updates status for all buyers in {activeBatch.batch_name}</div>
                   </div>
                   <select
                     value={activeBatch.status || 'Processing'}
@@ -432,17 +432,18 @@ export default function AdminPanel() {
                     style={{ background: '#09090b', color: '#38bdf8', border: '1px solid #2563eb', borderRadius: '8px', padding: '8px 12px', fontSize: '12px', fontWeight: 'bold', cursor: 'pointer' }}
                   >
                     <option value="Processing">Processing 📦</option>
-                    <option value="Shipped">Shipped ✈️</option>
-                    <option value="Delivered">Delivered ✅</option>
+                    <option value="Shipped from China">Shipped from China ✈️</option>
+                    <option value="Arrived in Ghana">Arrived in Ghana 🇬🇭</option>
+                    <option value="Delivered">Completed / Delivered ✅</option>
                   </select>
                 </div>
 
                 {/* ADD PRODUCT FORM */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <span style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8' }}>+ ADD NEW GOODS TO {activeBatch.batch_name.toUpperCase()}</span>
+                    <span style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8' }}>+ ADD GOODS TO {activeBatch.batch_name.toUpperCase()}</span>
                     <button onClick={handleEndBatch} style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
-                      End Batch
+                      End Batch & Save
                     </button>
                   </div>
 
@@ -485,13 +486,13 @@ export default function AdminPanel() {
                   </form>
                 </div>
 
-                {/* ACTIVE PRODUCTS LIST */}
+                {/* PRESENT PRODUCTS */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                   <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
                     PRESENT BATCH GOODS ({products.length})
                   </h3>
                   {products.length === 0 ? (
-                    <p style={{ fontSize: '12px', color: '#71717a' }}>No products added to this batch yet.</p>
+                    <p style={{ fontSize: '12px', color: '#71717a' }}>No products in this drop yet.</p>
                   ) : (
                     products.map((p) => (
                       <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', background: '#09090b', border: '1px solid #27272a', padding: '10px', borderRadius: '10px', marginBottom: '8px' }}>
@@ -508,100 +509,111 @@ export default function AdminPanel() {
                   )}
                 </div>
 
-                {/* CURRENT ORDERS & SUPPLIER TALLY TOGGLE SECTION */}
+                {/* BUYERS & SUPPLIER TALLY TABS */}
                 <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        onClick={() => setPresentSubTab('orders')}
-                        style={{
-                          background: presentSubTab === 'orders' ? '#27272a' : 'transparent',
-                          color: presentSubTab === 'orders' ? '#38bdf8' : '#71717a',
-                          border: 'none',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Buyers ({filteredCurrentOrders.length})
-                      </button>
-                      <button
-                        onClick={() => setPresentSubTab('supplier')}
-                        style={{
-                          background: presentSubTab === 'supplier' ? '#27272a' : 'transparent',
-                          color: presentSubTab === 'supplier' ? '#38bdf8' : '#71717a',
-                          border: 'none',
-                          padding: '4px 8px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: 800,
-                          cursor: 'pointer',
-                        }}
-                      >
-                        Supplier Tally List 📋
-                      </button>
-                    </div>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+                    <button
+                      onClick={() => setPresentSubTab('orders')}
+                      style={{
+                        background: presentSubTab === 'orders' ? '#27272a' : 'transparent',
+                        color: presentSubTab === 'orders' ? '#38bdf8' : '#71717a',
+                        border: 'none',
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Buyers ({filteredCurrentOrders.length})
+                    </button>
+                    <button
+                      onClick={() => setPresentSubTab('supplier')}
+                      style={{
+                        background: presentSubTab === 'supplier' ? '#27272a' : 'transparent',
+                        color: presentSubTab === 'supplier' ? '#38bdf8' : '#71717a',
+                        border: 'none',
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Supplier Tally List 📋
+                    </button>
                   </div>
 
                   {presentSubTab === 'orders' ? (
-                    /* CUSTOMER ORDERS LIST WITH WHATSAPP BUTTON & PAGINATION */
                     filteredCurrentOrders.length === 0 ? (
-                      <p style={{ fontSize: '12px', color: '#71717a' }}>No matching orders found.</p>
+                      <p style={{ fontSize: '12px', color: '#71717a' }}>No orders found.</p>
                     ) : (
                       <div>
-                        {getPaginatedData(filteredCurrentOrders).map((ord) => (
-                          <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                              <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>
-                                {ord.customer_name} ({ord.customer_phone})
-                              </span>
-                              <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>GH₵ {ord.amount_paid}</span>
-                            </div>
-                            <div style={{ fontSize: '12px', color: '#a1a1aa' }}>Item: {ord.items}</div>
-                            
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {getPaginatedData(filteredCurrentOrders).map((ord) => {
+                          const depositPaid = Number(ord.amount_paid || 0);
+                          const total100Price = ord.total_price ? Number(ord.total_price) : Math.round(depositPaid / 0.7);
+                          const balance30 = total100Price - depositPaid;
+                          const deliveryFee = 30;
+                          const finalArrivalAmount = balance30 + deliveryFee;
+
+                          return (
+                            <div key={ord.id} style={{ background: '#09090b', border: '1px solid #27272a', padding: '12px', borderRadius: '10px', marginBottom: '10px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                <span style={{ fontWeight: 'bold', color: '#fff', fontSize: '13px' }}>
+                                  {ord.customer_name} ({ord.customer_phone})
+                                </span>
+                                <span style={{ color: '#4ade80', fontWeight: 'bold', fontSize: '13px' }}>
+                                  Paid: GH₵ {depositPaid}
+                                </span>
+                              </div>
+
+                              <div style={{ fontSize: '12px', color: '#a1a1aa', marginBottom: '6px' }}>Item: {ord.items}</div>
+
+                              {/* CONDITIONAL 30% BALANCE & DELIVERY FEE DISPLAY TRIGGER */}
+                              {isArrivedInGhana ? (
+                                <div style={{ background: '#1e1b4b', border: '1px solid #4338ca', borderRadius: '8px', padding: '10px', margin: '8px 0' }}>
+                                  <div style={{ fontSize: '11px', color: '#818cf8', fontWeight: 800, marginBottom: '2px' }}>
+                                    🇬🇭 ARRIVED IN GHANA — REMAINING PAYMENT
+                                  </div>
+                                  <div style={{ fontSize: '12px', color: '#c7d2fe', display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>30% Remaining Balance:</span>
+                                    <b>GH₵ {balance30}</b>
+                                  </div>
+                                  <div style={{ fontSize: '12px', color: '#c7d2fe', display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>Local Delivery Fee:</span>
+                                    <b>GH₵ {deliveryFee}</b>
+                                  </div>
+                                  <div style={{ fontSize: '13px', color: '#4ade80', fontWeight: 900, display: 'flex', justifyContent: 'space-between', marginTop: '4px', paddingTop: '4px', borderTop: '1px dashed #4338ca' }}>
+                                    <span>Total Final Balance Due:</span>
+                                    <span>GH₵ {finalArrivalAmount}</span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: '11px', color: '#a1a1aa', fontStyle: 'italic', marginBottom: '6px' }}>
+                                  ⏳ Remaining 30% balance + delivery fee triggers when batch arrives in Ghana.
+                                </div>
+                              )}
+
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
                                 <select
-                                  value={ord.status || 'Paid'}
+                                  value={ord.status || 'Deposit Paid'}
                                   onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
                                   style={{ background: '#18181b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '6px', padding: '4px 8px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer' }}
                                 >
-                                  <option value="Paid">Paid 💳</option>
-                                  <option value="Delivered">Delivered ✅</option>
+                                  <option value="Deposit Paid">70% Deposit Paid 💳</option>
+                                  <option value="Final Payment Received">100% Fully Paid ✅</option>
+                                  <option value="Delivered">Delivered 🚚</option>
                                 </select>
 
-                                {/* WHATSAPP DIRECT BUTTON */}
-                                <a
-                                  href={getWhatsAppLink(ord.customer_phone, ord.customer_name, ord.items)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{
-                                    background: '#16a34a',
-                                    color: '#fff',
-                                    textDecoration: 'none',
-                                    padding: '4px 8px',
-                                    borderRadius: '6px',
-                                    fontSize: '11px',
-                                    fontWeight: 'bold',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: '4px'
-                                  }}
-                                >
-                                  WhatsApp 💬
-                                </a>
+                                <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
+                                  Delete 🗑️
+                                </button>
                               </div>
-
-                              <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '12px', cursor: 'pointer' }}>
-                                Delete 🗑️
-                              </button>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
 
-                        {/* PAGINATION CONTROLS */}
+                        {/* PAGINATION */}
                         {filteredCurrentOrders.length > ordersPerPage && (
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #27272a' }}>
                             <button
@@ -626,10 +638,10 @@ export default function AdminPanel() {
                       </div>
                     )
                   ) : (
-                    /* ENHANCED SUPPLIER CONSOLIDATED AUTO-TALLY LIST */
+                    /* CONSOLIDATED AUTO-TALLY LIST */
                     <div>
                       <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '10px' }}>
-                        Live China wholesale order quantities:
+                        Live China supplier order breakdown:
                       </div>
                       {Object.keys(supplierTally).length === 0 ? (
                         <p style={{ fontSize: '12px', color: '#71717a' }}>No items ordered yet.</p>
@@ -660,12 +672,14 @@ export default function AdminPanel() {
           </div>
         )}
 
+        {/* HISTORY & REVENUE SUMMARY TAB */}
         {adminTab === 'past' && (
           <div>
             <h3 style={{ fontSize: '14px', fontWeight: 800, color: '#38bdf8', marginBottom: '12px' }}>
-              BATCHES & HISTORY
+              BATCH HISTORY & FINANCES
             </h3>
 
+            {/* BATCH SELECTOR */}
             <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '10px', marginBottom: '16px' }}>
               <button
                 onClick={() => setSelectedPastBatch(null)}
@@ -681,7 +695,7 @@ export default function AdminPanel() {
                   cursor: 'pointer',
                 }}
               >
-                All Orders ({pastOrders.length})
+                All Batches Combined
               </button>
               {allBatches.map((b) => (
                 <div key={b.id} style={{ display: 'flex', alignItems: 'center', background: selectedPastBatch === b.batch_name ? '#2563eb' : '#18181b', border: '1px solid #27272a', borderRadius: '20px', paddingRight: '6px' }}>
@@ -698,7 +712,7 @@ export default function AdminPanel() {
                       cursor: 'pointer',
                     }}
                   >
-                    {b.batch_name} {!b.is_active && '(Closed)'}
+                    {b.batch_name} {!b.is_active && '(Ended)'}
                   </button>
                   {!b.is_active && (
                     <button onClick={() => handleDeleteBatch(b.id, b.batch_name)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '11px', cursor: 'pointer', padding: '0 4px' }}>
@@ -709,16 +723,39 @@ export default function AdminPanel() {
               ))}
             </div>
 
+            {/* HISTORICAL REVENUE SUMMARY CARD */}
+            {(() => {
+              const historicalMetrics = calculateBatchMetrics(filteredPastOrders);
+              return (
+                <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px', marginBottom: '16px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '800', color: '#a1a1aa', marginBottom: '10px' }}>
+                    FINANCIAL SUMMARY FOR {selectedPastBatch ? selectedPastBatch.toUpperCase() : 'ALL HISTORICAL ORDERS'}
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div style={{ background: '#09090b', padding: '10px', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '10px', color: '#a1a1aa' }}>100% TOTAL POTENTIAL</div>
+                      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#38bdf8' }}>GH₵ {historicalMetrics.expectedTotal100.toLocaleString()}</div>
+                    </div>
+                    <div style={{ background: '#09090b', padding: '10px', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '10px', color: '#a1a1aa' }}>ACTUAL DEPOSITS PAID</div>
+                      <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#4ade80' }}>GH₵ {historicalMetrics.actualCollected.toLocaleString()}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ORDERS TABLE */}
             <div style={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '16px', padding: '16px' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.4fr', paddingBottom: '8px', borderBottom: '1px solid #27272a', fontSize: '12px', color: '#a1a1aa', fontWeight: 700 }}>
                 <span>Buyer / Batch</span>
                 <span>Item</span>
-                <span>Status / Total</span>
+                <span>Deposit / Total</span>
                 <span style={{ textAlign: 'right' }}>Action</span>
               </div>
 
               {filteredPastOrders.length === 0 ? (
-                <p style={{ fontSize: '12px', color: '#71717a', padding: '12px 0' }}>No matching orders found.</p>
+                <p style={{ fontSize: '12px', color: '#71717a', padding: '12px 0' }}>No historical orders found.</p>
               ) : (
                 getPaginatedData(filteredPastOrders).map((ord) => (
                   <div key={ord.id} style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr 0.4fr', padding: '12px 0', borderBottom: '1px solid #27272a', fontSize: '12px', alignItems: 'center' }}>
@@ -728,22 +765,11 @@ export default function AdminPanel() {
                     </div>
                     <div style={{ color: '#a1a1aa' }}>{ord.items}</div>
                     <div>
-                      <div style={{ fontWeight: 'bold', color: '#4ade80' }}>GH₵ {ord.amount_paid}</div>
-                      <select
-                        value={ord.status || 'Paid'}
-                        onChange={(e) => handleOrderStatusChange(ord.id, e.target.value)}
-                        style={{ background: '#09090b', color: '#60a5fa', border: '1px solid #3f3f46', borderRadius: '4px', padding: '2px 4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer', marginTop: '4px' }}
-                      >
-                        <option value="Paid">Paid 💳</option>
-                        <option value="Delivered">Delivered ✅</option>
-                      </select>
+                      <div style={{ fontWeight: 'bold', color: '#4ade80' }}>Paid: GH₵ {ord.amount_paid}</div>
+                      <div style={{ fontSize: '10px', color: '#71717a' }}>100%: GH₵ {ord.total_price || Math.round(Number(ord.amount_paid) / 0.7)}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <button
-                        onClick={() => handleDeleteOrder(ord.id)}
-                        style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '13px', cursor: 'pointer' }}
-                        title="Delete Order"
-                      >
+                      <button onClick={() => handleDeleteOrder(ord.id)} style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '13px', cursor: 'pointer' }}>
                         🗑️
                       </button>
                     </div>
@@ -751,7 +777,7 @@ export default function AdminPanel() {
                 ))
               )}
 
-              {/* PAST ORDERS PAGINATION CONTROLS */}
+              {/* PAST ORDERS PAGINATION */}
               {filteredPastOrders.length > ordersPerPage && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', paddingTop: '12px', borderTop: '1px solid #27272a' }}>
                   <button
