@@ -144,7 +144,7 @@ export default function Storefront() {
     }
   };
 
-  // Fixed Balance Payment Trigger
+  // Fixed Balance Payment Trigger with Supabase Update
   const handlePayBalance = (ord, balance30, deliveryFee, finalTotal) => {
     const paystackKey = process.env.NEXT_PUBLIC_PAYSTACK_PUBLIC_KEY;
 
@@ -166,6 +166,7 @@ export default function Storefront() {
         callback: function (response) {
           if (response.status === 'success' || response.message === 'Approved') {
             const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
+            
             supabase
               .from('orders')
               .update({
@@ -175,7 +176,7 @@ export default function Storefront() {
                 payment_reference: response.reference,
               })
               .eq('id', ord.id)
-              .then(({ error }) => {
+              .then(({ data, error }) => {
                 if (error) {
                   alert('Payment received, but failed to update order: ' + error.message);
                 } else {
