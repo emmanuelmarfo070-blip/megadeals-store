@@ -157,16 +157,16 @@ export default function Storefront() {
     }
 
     try {
-      const handler = window.PaystackPop.setup({
+      const paystackConfig = {
         key: paystackKey,
-        email: ord.customer_email || `${ord.customer_phone || 'customer'}@megadeals.com`,
+        email: ord.customer_email && ord.customer_email.includes('@') ? ord.customer_email : `${ord.customer_phone || 'customer'}@megadeals.com`,
         amount: Math.round(finalTotal * 100),
         currency: 'GHS',
         ref: `BAL_${ord.id}_${Date.now()}`,
-        callback: async function (response) {
+        callback: function (response) {
           if (response.status === 'success' || response.message === 'Approved') {
             const totalPaidNow = Number(ord.amount_paid || 0) + balance30;
-            const { error } = await supabase
+            supabase
               .from('orders')
               .update({
                 status: 'Final Payment Received',
@@ -174,25 +174,27 @@ export default function Storefront() {
                 deposit_percentage: '100',
                 payment_reference: response.reference,
               })
-              .eq('id', ord.id);
-
-            if (error) {
-              alert('Payment received, but failed to update order: ' + error.message);
-            } else {
-              alert('Payment Successful! Your order is fully paid! ✅');
-              if (user) {
-                fetchUserOrders(user.email);
-              } else if (guestPhone) {
-                handleGuestPhoneSearch();
-              }
-            }
+              .eq('id', ord.id)
+              .then(({ error }) => {
+                if (error) {
+                  alert('Payment received, but failed to update order: ' + error.message);
+                } else {
+                  alert('Payment Successful! Your order is fully paid! ✅');
+                  if (user) {
+                    fetchUserOrders(user.email);
+                  } else if (guestPhone) {
+                    handleGuestPhoneSearch();
+                  }
+                }
+              });
           }
         },
         onClose: function () {
           console.log('Payment popup closed');
         },
-      });
+      };
 
+      const handler = window.PaystackPop.setup(paystackConfig);
       handler.openIframe();
     } catch (err) {
       alert('Paystack Error: ' + err.message);
